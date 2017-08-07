@@ -41,7 +41,7 @@ const (
 	TypeMock              = "mock"          // mock sender
 	TypeDiscard           = "discard"       // discard sender
 	TypeElastic           = "elasticsearch" // elastic
-
+	TypeMultiPandora      = "multi_pandora" // elastic
 )
 
 // Ft sender默认同步一次meta信息的数据次数
@@ -63,6 +63,7 @@ func NewSenderRegistry() *SenderRegistry {
 	ret.RegisterSender(TypeElastic, NewElasticSender)
 	ret.RegisterSender(TypeMock, NewMockSender)
 	ret.RegisterSender(TypeDiscard, NewDiscardSender)
+	// ret.RegisterSender(TypeMultiPandora, NewMultiPandoraSender)
 	return ret
 }
 

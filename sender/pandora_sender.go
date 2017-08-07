@@ -480,7 +480,26 @@ func (s *PandoraSender) checkSchemaUpdate() {
 	s.UpdateSchemas()
 }
 
+func (s *PandoraSender) filteData(datas []Data) (export []Data) {
+	export = []Data{}
+	for _, v := range datas {
+		if x, ok := v["domain"]; ok {
+			domain := x.(string)
+			if domain == s.Name() {
+				// fmt.Println("domain", domain, s.Name())
+				export = append(export, v)
+			}
+		}
+	}
+	return export
+}
+
 func (s *PandoraSender) Send(datas []Data) (se error) {
+	datas = s.filteData(datas)
+	if len(datas) == 0 {
+		return
+	}
+	// fmt.Println("len datas", len(datas))
 	s.checkSchemaUpdate()
 	if !s.opt.schemaFree && (len(s.schemas) <= 0 || len(s.alias2key) <= 0) {
 		se = reqerr.NewSendError("Get pandora schema error, faild to send data", ConvertDatasBack(datas), reqerr.TypeDefault)

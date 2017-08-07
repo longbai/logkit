@@ -25,16 +25,17 @@ const (
 
 // parser 的类型
 const (
-	TypeCSV        = "csv"
-	TypeLogv1      = "qiniulog"
-	TypeKafkaRest  = "kafkarest"
-	TypeRaw        = "raw"
-	TypeEmpty      = "empty"
-	TypeGrok       = "grok"
-	TypeInnerSQL   = "_sql"
-	TypeInnerMysql = "_mysql"
-	TypeJson       = "json"
-	TypeNginx      = "nginx"
+	TypeCSV            = "csv"
+	TypeLogv1          = "qiniulog"
+	TypeKafkaRest      = "kafkarest"
+	TypeRaw            = "raw"
+	TypeEmpty          = "empty"
+	TypeGrok           = "grok"
+	TypeInnerSQL       = "_sql"
+	TypeInnerMysql     = "_mysql"
+	TypeJson           = "json"
+	TypeNginx          = "nginx"
+	TypeKafkaQosStream = "kafka_qos_stream"
 )
 
 type Label struct {
@@ -60,6 +61,7 @@ func NewParserRegistry() *ParserRegistry {
 	ps.RegisterParser(TypeInnerMysql, NewJsonParser) //兼容
 	ps.RegisterParser(TypeJson, NewJsonParser)
 	ps.RegisterParser(TypeNginx, NewNginxParser)
+	ps.RegisterParser(TypeKafkaQosStream, NewKafkaQosStreamParser)
 	return ps
 }
 
