@@ -483,7 +483,7 @@ func (krp *KafkaQosStreamParser) Parse(lines []string) ([]sender.Data, error) {
 			}
 			for _, v := range krp.domains {
 				if v == e.Domain {
-					fmt.Println("parse domain", v, e.Domain)
+					// fmt.Println("parse domain", v, e.Domain)
 					datas = append(datas, dt)
 				}
 			}
