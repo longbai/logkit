@@ -293,7 +293,8 @@ func streamEventToSenderData(e *StreamEvent) sender.Data {
 	d := sender.Data{}
 	d["client_ip"] = e.ClientIp
 	d["tag"] = e.Tag
-	d["client_time"] = e.ClientTime
+	d["client_time"] = e.ClientTime.Format(time.RFC3339)
+	d["server_time"] = time.Unix(e.TimeStamp/1000, 0).Format(time.RFC3339)
 	d["device"] = e.Device
 	d["protocol"] = e.Protocol
 	d["domain"] = e.Domain
@@ -326,7 +327,8 @@ func streamStartEventToSenderData(e *StreamEvent) sender.Data {
 	d := sender.Data{}
 	d["client_ip"] = e.ClientIp
 	d["tag"] = e.Tag
-	d["client_time"] = e.ClientTime
+	d["client_time"] = e.ClientTime.Format(time.RFC3339)
+	d["server_time"] = time.Unix(e.TimeStamp/1000, 0).Format(time.RFC3339)
 	d["device"] = e.Device
 	d["protocol"] = e.Protocol
 	d["domain"] = e.Domain
@@ -352,7 +354,8 @@ func streamEndEventToSenderData(e *StreamEvent) sender.Data {
 	d := sender.Data{}
 	d["client_ip"] = e.ClientIp
 	d["tag"] = e.Tag
-	d["client_time"] = e.ClientTime
+	d["client_time"] = e.ClientTime.Format(time.RFC3339)
+	d["server_time"] = time.Unix(e.TimeStamp/1000, 0).Format(time.RFC3339)
 	d["device"] = e.Device
 	d["protocol"] = e.Protocol
 	d["domain"] = e.Domain
@@ -465,18 +468,21 @@ func (krp *KafkaQosStreamParser) Parse(lines []string) ([]sender.Data, error) {
 				if err != nil || e == nil {
 					continue
 				}
+				e.TimeStamp = msg.Timestamp
 				dt = streamEventToSenderData(e)
 			} else if data[1] == "stream_start.v5" {
 				e, err = krp.parseStreamStartEvent(data)
 				if err != nil || e == nil {
 					continue
 				}
+				e.TimeStamp = msg.Timestamp
 				dt = streamStartEventToSenderData(e)
 			} else if data[1] == "stream_end.v5" {
 				e, err = krp.parseStreamEndEvent(data)
 				if err != nil || e == nil {
 					continue
 				}
+				e.TimeStamp = msg.Timestamp
 				dt = streamEndEventToSenderData(e)
 			} else {
 				continue

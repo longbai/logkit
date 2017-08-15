@@ -204,9 +204,9 @@ func newPandoraSender(opt *PandoraOption) (s *PandoraSender, err error) {
 		schemas:    make(map[string]pipeline.RepoSchemaEntry),
 	}
 	if createErr := createPandoraRepo(opt.autoCreate, opt.repoName, opt.region, client); createErr != nil {
-		if !strings.Contains(createErr.Error(), "E18101") {
-			log.Errorf("Runner[%v] Sender[%v]: auto create pandora repo error: %v, you can create on pandora portal, ignored...", opt.runnerName, opt.name, createErr)
-		}
+		// if !strings.Contains(createErr.Error(), "E18101") {
+		log.Warnf("Runner[%v] Sender[%v]: auto create pandora repo error: %v, you can create on pandora portal, ignored...", opt.runnerName, opt.name, createErr)
+		// }
 	}
 	// 如果updateSchemas更新schema失败，不会报错，可以正常启动runner，但是在sender时会检查schema是否获取
 	// sender时会尝试不断获取pandora schema，若还是获取失败则返回发送错误。
@@ -263,7 +263,7 @@ func parseUserSchema(repoName, schema string) (us UserSchema) {
 
 func (s *PandoraSender) UpdateSchemas() {
 	schemas, err := s.client.GetUpdateSchemas(s.opt.repoName)
-	if err != nil && (!s.opt.schemaFree || !reqerr.IsNoSuchResourceError(err)) {
+	if err != nil /*&& (!s.opt.schemaFree || !reqerr.IsNoSuchResourceError(err))*/ {
 		log.Warnf("Runner[%v] Sender[%v]: update pandora repo <%v> schema error %v", s.opt.runnerName, s.opt.name, s.opt.repoName, err)
 		return
 	}
@@ -335,6 +335,8 @@ func convertDate(v interface{}, option forceMicrosecondOption) (interface{}, err
 		s = int64(newv)
 	case int16:
 		s = int64(newv)
+	case time.Time:
+		s = newv.Unix()
 	case string:
 		t, err := times.StrToTime(newv)
 		if err != nil {
