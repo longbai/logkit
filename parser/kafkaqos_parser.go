@@ -183,7 +183,7 @@ func (krp *KafkaQosStreamParser) parseStreamStartEvent(data []string) (e *Stream
 }
 
 func (krp *KafkaQosStreamParser) parseStreamEndEvent(data []string) (e *StreamEvent, err error) {
-	if data == nil || len(data) < 23 {
+	if data == nil || len(data) < 42 {
 		return nil, fmt.Errorf("not enough data")
 	}
 	if data[1] != "stream_end.v5" {
