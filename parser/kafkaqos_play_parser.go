@@ -91,6 +91,8 @@ type PlayEvent struct {
 
 }
 
+//222.188.168.212	play.v5	1504250399319	1503281015004993	1.1.0.32	rtmp	pull.lespark.cn	live/57762d4b245bfa685f92af03	-	61.160.199.165	1504250339036	1504250399319	0	14.35	0	47.00	0	13.34	37.22	3342	3968	97199	351830
+
 func (krp *KafkaQosPlayParser) parsePlayEvent(data []string) (e *PlayEvent, err error) {
 	if data == nil || len(data) < 23 {
 		return nil, fmt.Errorf("not enough data")
@@ -141,8 +143,10 @@ func (krp *KafkaQosPlayParser) parsePlayEvent(data []string) (e *PlayEvent, err 
 	return &event, nil
 }
 
+//112.96.173.42	play_start.v5	1504250339646	1501257229489135	1.5.1	http	114.55.127.136	/g15695073s0t1504250339644u5953981i17.flv	-	114.55.127.136	3615	3698	1002	ffmpeg	ffmpeg	0	0
+
 func (krp *KafkaQosPlayParser) parsePlayStartEvent(data []string) (e *PlayEvent, err error) {
-	if data == nil || len(data) < 17 {
+	if data == nil || len(data) < 16 {
 		return nil, fmt.Errorf("not enough data")
 	}
 	if data[1] != "play_start.v5" {
@@ -162,9 +166,12 @@ func (krp *KafkaQosPlayParser) parsePlayStartEvent(data []string) (e *PlayEvent,
 
 	event.FirstVideoTime, _ = strconv.ParseInt(data[10], 10, 64)
 	event.FirstAudioTIme, _ = strconv.ParseInt(data[11], 10, 64)
-	event.VideoDecodeType = data[12]
-	event.AudioDecodeType = data[13]
-	event.GopTime, _ = strconv.ParseInt(data[14], 10, 64)
+
+	event.GopTime, _ = strconv.ParseInt(data[12], 10, 64)
+
+	event.VideoDecodeType = data[13]
+	event.AudioDecodeType = data[14]
+
 	// event.TcpConnect, _ = strconv.ParseInt(data[15], 10, 64)
 	// event.RtmpConnect, _ = strconv.ParseInt(data[16], 10, 64)
 
@@ -185,8 +192,10 @@ func (krp *KafkaQosPlayParser) parsePlayStartEvent(data []string) (e *PlayEvent,
 	return &event, nil
 }
 
+//171.41.69.17	play_end.v5	1504250401045	1503145461301629	1.5.1	http	flv.live-baidu.rela.me	/live/101059696.flv	-	flv.live-baidu.rela.me	1504250386897	1504250401045	0	0 1559514	0	2999	vivo_X9	Android	6.0.1	com.thel	4.0.2	0.378	0.178	0.630	0.052	ffmpeg-3.2;PLDroidPlayer-1.5.1	60	WIFI	192.168.1.103	8.8.8.8	"luckywan"	-	-6300	0	0	-	0	0
+//112.96.173.42	play_end.v5	1504250395823	1501257229489135	1.5.1	http	114.55.127.136	/g15695073s0t1504250339644u5953981i17.flv	-	114.55.127.136	1504250335947	1504250395822	0	0	1822465	0	1002	XiaomiMI_MAX_2	Android	7.1.1	com.sdbean.werewolf	2.07	0.325	0.133	0.777	0.037	ffmpeg-3.2;PLDroidPlayer-1.5.1	60	LTE	10.179.133.142	221.5.88.88	-	-	0	0	0	0	0	-	0	0
 func (krp *KafkaQosPlayParser) parsePlayEndEvent(data []string) (e *PlayEvent, err error) {
-	if data == nil || len(data) < 42 {
+	if data == nil || len(data) < 36 {
 		return nil, fmt.Errorf("not enough data")
 	}
 	if data[1] != "play_end.v5" {
