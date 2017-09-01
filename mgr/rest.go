@@ -1,19 +1,22 @@
 package mgr
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/labstack/echo"
 	"github.com/qiniu/log"
-
-	rest "github.com/qiniu/logkit/http"
+	"github.com/qiniu/logkit/conf"
+	"github.com/qiniu/logkit/parser"
 )
 
 var DEFAULT_PORT = 4000
@@ -28,18 +31,39 @@ type cmdArgs struct {
 }
 
 type RestService struct {
-	mgr *Manager
-	l   net.Listener
+	mgr     *Manager
+	l       net.Listener
+	address string
 }
 
-func NewRestService(mgr *Manager) *RestService {
+func NewRestService(mgr *Manager, router *echo.Echo) *RestService {
 
 	rs := &RestService{
 		mgr: mgr,
 	}
+	router.GET(PREFIX+"/status", rs.Status())
+	router.GET(PREFIX+"/configs", rs.GetConfigs())
+	router.GET(PREFIX+"/configs/:name", rs.GetConfig())
+	router.POST(PREFIX+"/configs/:name", rs.PostConfig())
+	router.DELETE(PREFIX+"/configs/:name", rs.DeleteConfig())
 
-	mux := rest.NewServeMux()
-	mux.HandleFunc("GET "+PREFIX+"/status", rs.GetStatus)
+	//reader API
+	router.GET(PREFIX+"/reader/usages", rs.GetReaderUsages())
+	router.GET(PREFIX+"/reader/options", rs.GetReaderKeyOptions())
+	router.POST(PREFIX+"/reader/check", rs.PostReaderCheck())
+
+	//parser API
+	router.GET(PREFIX+"/parser/usages", rs.GetParserUsages())
+	router.GET(PREFIX+"/parser/options", rs.GetParserKeyOptions())
+	router.POST(PREFIX+"/parser/parse", rs.PostParse())
+	router.GET(PREFIX+"/parser/samplelogs", rs.GetParserSampleLogs())
+	router.POST(PREFIX+"/parser/check", rs.PostParserCheck())
+
+	//sender API
+	router.GET(PREFIX+"/sender/usages", rs.GetSenderUsages())
+	router.GET(PREFIX+"/sender/options", rs.GetSenderKeyOptions())
+	router.POST(PREFIX+"/sender/check", rs.PostSenderCheck())
+
 	var (
 		port     = DEFAULT_PORT
 		address  string
@@ -48,11 +72,14 @@ func NewRestService(mgr *Manager) *RestService {
 	)
 
 	for {
+		if port > 10000 {
+			log.Fatal("bind port failed too many times, exit...")
+		}
 		address = ":" + strconv.Itoa(port)
 		if mgr.BindHost != "" {
 			address = mgr.BindHost
 		}
-		listener, err = httpserve(address, mux)
+		listener, err = httpserve(address, router)
 		if err != nil {
 			err = fmt.Errorf("bind address %v for RestService error %v", address, err)
 			if mgr.BindHost != "" {
@@ -71,6 +98,7 @@ func NewRestService(mgr *Manager) *RestService {
 	if err != nil {
 		log.Warn(err)
 	}
+	rs.address = address
 	return rs
 }
 
@@ -93,12 +121,101 @@ func generateStatsShell(address, prefix string) (err error) {
 }
 
 // get /logkit/status
-func (rs *RestService) GetStatus(rw http.ResponseWriter, req *http.Request) {
-	rss := rs.mgr.Status()
-	br, _ := json.Marshal(rss)
-	rw.Write(br)
-	rw.Header().Set("Content-Type", "application/json")
-	return
+func (rs *RestService) Status() echo.HandlerFunc {
+	return func(c echo.Context) error {
+		rss := rs.mgr.Status()
+		return c.JSON(http.StatusOK, rss)
+	}
+}
+
+// get /logkit/configs
+func (rs *RestService) GetConfigs() echo.HandlerFunc {
+	return func(c echo.Context) error {
+		rs.mgr.lock.RLock()
+		defer rs.mgr.lock.RUnlock()
+		rss := make(map[string]RunnerConfig)
+		for k, v := range rs.mgr.runnerConfig {
+			if filepath.Dir(k) == rs.mgr.RestDir {
+				v.IsInWebFolder = true
+			}
+			rss[k] = v
+		}
+		return c.JSON(http.StatusOK, rss)
+	}
+}
+
+// get /logkit/configs/:name
+func (rs *RestService) GetConfig() echo.HandlerFunc {
+	return func(c echo.Context) error {
+		name := c.Param("name")
+		filename := rs.mgr.RestDir + "/" + name + ".conf"
+		rs.mgr.lock.RLock()
+		defer rs.mgr.lock.RUnlock()
+		rss, ok := rs.mgr.runnerConfig[filename]
+		if name == "" || !ok {
+			return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("config name is empty or file %v not exist", filename))
+		}
+		return c.JSON(http.StatusOK, rss)
+	}
+}
+
+func convertWebParserConfig(conf conf.MapConf) conf.MapConf {
+	if conf == nil {
+		return conf
+	}
+	rawCustomPatterns, _ := conf.GetStringOr(parser.KeyGrokCustomPatterns, "")
+	if rawCustomPatterns != "" {
+		CustomPatterns, err := base64.StdEncoding.DecodeString(rawCustomPatterns)
+		if err != nil {
+			return conf
+		}
+		conf[parser.KeyGrokCustomPatterns] = string(CustomPatterns)
+	}
+	return conf
+}
+
+// post /logkit/configs/<name>
+func (rs *RestService) PostConfig() echo.HandlerFunc {
+	return func(c echo.Context) (err error) {
+		name := c.Param("name")
+		if name == "" {
+			return echo.NewHTTPError(http.StatusBadRequest, "config name is empty")
+		}
+
+		var nconf RunnerConfig
+		if err = c.Bind(&nconf); err != nil {
+			return err
+		}
+		filename := rs.mgr.RestDir + "/" + nconf.RunnerName + ".conf"
+		if rs.mgr.isRunning(filename) {
+			return echo.NewHTTPError(http.StatusBadRequest, "file "+filename+" runner is running")
+		}
+		nconf.ParserConf = convertWebParserConfig(nconf.ParserConf)
+		nconf.IsInWebFolder = true
+		err = rs.mgr.ForkRunner(filename, nconf, true)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		confBytes, err := json.Marshal(nconf)
+		err = ioutil.WriteFile(filename, confBytes, 0644)
+		return
+	}
+}
+
+// delete /logkit/configs/<name>
+func (rs *RestService) DeleteConfig() echo.HandlerFunc {
+	return func(c echo.Context) error {
+		name := c.Param("name")
+		if name == "" {
+			return echo.NewHTTPError(http.StatusBadRequest, "config name is empty")
+		}
+		filename := rs.mgr.RestDir + "/" + name + ".conf"
+		err := rs.mgr.Remove(filename)
+		if err != nil {
+			return err
+		}
+		return os.Remove(filename)
+	}
 }
 
 // Stop will stop RestService

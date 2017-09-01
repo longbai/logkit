@@ -5,13 +5,14 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
 
-	"os"
+	"encoding/json"
 
 	"github.com/qiniu/log"
 	"github.com/qiniu/logkit/cleaner"
@@ -19,6 +20,7 @@ import (
 	"github.com/qiniu/logkit/parser"
 	"github.com/qiniu/logkit/reader"
 	"github.com/qiniu/logkit/sender"
+	"github.com/qiniu/logkit/transforms"
 	"github.com/qiniu/logkit/utils"
 	"github.com/qiniu/pandora-go-sdk/base/reqerr"
 )
@@ -54,11 +56,13 @@ type RunnerLag struct {
 // RunnerConfig 从多数据源读取，经过解析后，发往多个数据目的地
 type RunnerConfig struct {
 	RunnerInfo
-	Metric        []conf.MapConf `json:"metric"`
-	ReaderConfig  conf.MapConf   `json:"reader"`
-	CleanerConfig conf.MapConf   `json:"cleaner"`
-	ParserConf    conf.MapConf   `json:"parser"`
-	SenderConfig  []conf.MapConf `json:"senders"`
+	Metric        []conf.MapConf           `json:"metric"`
+	ReaderConfig  conf.MapConf             `json:"reader"`
+	CleanerConfig conf.MapConf             `json:"cleaner"`
+	ParserConf    conf.MapConf             `json:"parser"`
+	Transforms    []map[string]interface{} `json:"transforms"`
+	SenderConfig  []conf.MapConf           `json:"senders"`
+	IsInWebFolder bool                     `json:"web_folder,omitempty"`
 }
 
 type RunnerInfo struct {
@@ -73,13 +77,15 @@ type RunnerInfo struct {
 type LogExportRunner struct {
 	RunnerInfo
 
-	stopped  int32
-	exitChan chan struct{}
-	reader   reader.Reader
-	cleaner  *cleaner.Cleaner
-	parser   parser.LogParser
-	senders  []sender.Sender
-	rs       RunnerStatus
+	stopped      int32
+	exitChan     chan struct{}
+	reader       reader.Reader
+	cleaner      *cleaner.Cleaner
+	parser       parser.LogParser
+	senders      []sender.Sender
+	transformers []transforms.Transformer
+
+	rs RunnerStatus
 
 	meta *reader.Meta
 
@@ -110,11 +116,11 @@ func NewCustomRunner(rc RunnerConfig, cleanChan chan<- cleaner.CleanSignal, ps *
 	return NewLogExportRunner(rc, cleanChan, ps, sr)
 }
 
-func NewRunnerWithService(info RunnerInfo, reader reader.Reader, cleaner *cleaner.Cleaner, parser parser.LogParser, senders []sender.Sender, meta *reader.Meta) (runner Runner, err error) {
-	return NewLogExportRunnerWithService(info, reader, cleaner, parser, senders, meta)
+func NewRunnerWithService(info RunnerInfo, reader reader.Reader, cleaner *cleaner.Cleaner, parser parser.LogParser, transformers []transforms.Transformer, senders []sender.Sender, meta *reader.Meta) (runner Runner, err error) {
+	return NewLogExportRunnerWithService(info, reader, cleaner, parser, transformers, senders, meta)
 }
 
-func NewLogExportRunnerWithService(info RunnerInfo, reader reader.Reader, cleaner *cleaner.Cleaner, parser parser.LogParser, senders []sender.Sender, meta *reader.Meta) (runner *LogExportRunner, err error) {
+func NewLogExportRunnerWithService(info RunnerInfo, reader reader.Reader, cleaner *cleaner.Cleaner, parser parser.LogParser, transformers []transforms.Transformer, senders []sender.Sender, meta *reader.Meta) (runner *LogExportRunner, err error) {
 	if info.MaxBatchSize <= 0 {
 		info.MaxBatchSize = defaultMaxBatchSize
 	}
@@ -146,6 +152,9 @@ func NewLogExportRunnerWithService(info RunnerInfo, reader reader.Reader, cleane
 		return
 	}
 	runner.parser = parser
+
+	runner.transformers = transformers
+
 	if len(senders) < 1 {
 		err = errors.New("senders can not be nil")
 		return
@@ -162,7 +171,15 @@ func NewLogExportRunner(rc RunnerConfig, cleanChan chan<- cleaner.CleanSignal, p
 		MaxBatchInteval:  rc.MaxBatchInteval,
 		MaxBatchTryTimes: rc.MaxBatchTryTimes,
 	}
-
+	if rc.ReaderConfig == nil {
+		return nil, errors.New(rc.RunnerName + " readerConfig is nil")
+	}
+	if rc.SenderConfig == nil {
+		return nil, errors.New(rc.RunnerName + " SenderConfig is nil")
+	}
+	if rc.ParserConf == nil {
+		return nil, errors.New(rc.RunnerName + " ParserConf is nil")
+	}
 	rc.ReaderConfig[utils.GlobalKeyName] = rc.RunnerName
 	rc.ReaderConfig[reader.KeyRunnerName] = rc.RunnerName
 	for i := range rc.SenderConfig {
@@ -198,6 +215,7 @@ func NewLogExportRunner(rc RunnerConfig, cleanChan chan<- cleaner.CleanSignal, p
 	if err != nil {
 		return nil, err
 	}
+	transformers := createTransformers(rc)
 	senders := make([]sender.Sender, 0)
 	for _, c := range rc.SenderConfig {
 		s, err := sr.NewSender(c)
@@ -206,7 +224,43 @@ func NewLogExportRunner(rc RunnerConfig, cleanChan chan<- cleaner.CleanSignal, p
 		}
 		senders = append(senders, s)
 	}
-	return NewLogExportRunnerWithService(runnerInfo, rd, cl, parser, senders, meta)
+	return NewLogExportRunnerWithService(runnerInfo, rd, cl, parser, transformers, senders, meta)
+}
+
+func createTransformers(rc RunnerConfig) []transforms.Transformer {
+	transformers := make([]transforms.Transformer, 0)
+	for idx := range rc.Transforms {
+		tConf := rc.Transforms[idx]
+		tp := tConf[transforms.KeyType]
+		if tp == nil {
+			log.Error("field type is empty")
+			continue
+		}
+		strTP, ok := tp.(string)
+		if !ok {
+			log.Error("field type is not string")
+			continue
+		}
+		creater, ok := transforms.Transformers[strTP]
+		if !ok {
+			log.Errorf("type %v of transformer not exist", strTP)
+			continue
+		}
+		trans := creater()
+		delete(tConf, transforms.KeyType)
+		bts, err := json.Marshal(tConf)
+		if err != nil {
+			log.Errorf("type %v of transformer marshal config error %v", strTP, err)
+			continue
+		}
+		err = json.Unmarshal(bts, trans)
+		if err != nil {
+			log.Errorf("type %v of transformer unmarshal config error %v", strTP, err)
+			continue
+		}
+		transformers = append(transformers, trans)
+	}
+	return transformers
 }
 
 // trySend 尝试发送数据，如果此时runner退出返回false，其他情况无论是达到最大重试次数还是发送成功，都返回true
@@ -245,7 +299,10 @@ func (r *LogExportRunner) trySend(s sender.Sender, datas []sender.Data, times in
 			se, succ := err.(*reqerr.SendError)
 			if succ {
 				datas = sender.ConvertDatas(se.GetFailDatas())
-				//无限重试的
+				//无限重试的，除非遇到关闭
+				if atomic.LoadInt32(&r.stopped) > 0 {
+					return false
+				}
 				continue
 			}
 			if times <= 0 || cnt < times {
@@ -269,7 +326,9 @@ func (r *LogExportRunner) Run() {
 	for {
 		if atomic.LoadInt32(&r.stopped) > 0 {
 			log.Debugf("Runner[%v] exited from run", r.Name())
-			r.exitChan <- struct{}{}
+			if atomic.LoadInt32(&r.stopped) < 2 {
+				r.exitChan <- struct{}{}
+			}
 			return
 		}
 		// read data
@@ -304,6 +363,15 @@ func (r *LogExportRunner) Run() {
 		if len(lines) <= 0 {
 			log.Debugf("Runner[%v] fetched 0 lines", r.Name())
 			continue
+		}
+		for i := range r.transformers {
+			var err error
+			if r.transformers[i].Stage() == transforms.StageBeforeParser {
+				lines, err = r.transformers[i].RawTransform(lines)
+				if err != nil {
+					log.Error(err)
+				}
+			}
 		}
 		// parse data
 		datas, err := r.parser.Parse(lines)
@@ -347,6 +415,14 @@ func (r *LogExportRunner) Run() {
 				log.Errorf("Runner[%v] datasourcetag add error, datas %v not match with froms %v", r.Name(), datas, froms)
 			}
 		}
+		for i := range r.transformers {
+			if r.transformers[i].Stage() == transforms.StageAfterParser {
+				datas, err = r.transformers[i].Transform(datas)
+				if err != nil {
+					log.Error(err)
+				}
+			}
+		}
 		success := true
 		log.Debugf("Runner[%v] reader %s start to send at: %v", r.Name(), r.reader.Name(), time.Now().Format(time.RFC3339))
 		for _, s := range r.senders {
@@ -359,7 +435,7 @@ func (r *LogExportRunner) Run() {
 		if success {
 			r.reader.SyncMeta()
 		}
-		log.Debugf("Runner[%v] reader %s finish to send at: %v", r.Name(), r.reader.Name(), time.Now().Format(time.RFC3339))
+		log.Debugf("Runner[%v] send %s finish to send at: %v", r.Name(), r.reader.Name(), time.Now().Format(time.RFC3339))
 	}
 }
 
@@ -373,6 +449,7 @@ func (r *LogExportRunner) Stop() {
 		log.Warnf("runner " + r.Name() + " has been stopped ")
 	case <-timer.C:
 		log.Warnf("runner " + r.Name() + " exited timeout ")
+		atomic.AddInt32(&r.stopped, 1)
 	}
 	log.Warnf("Runner[%v] wait for reader %v stopped", r.Name(), r.reader.Name())
 	// 清理所有使用到的资源

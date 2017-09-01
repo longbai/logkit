@@ -36,6 +36,7 @@ const (
 	TypeJson           = "json"
 	TypeNginx          = "nginx"
 	TypeKafkaQosStream = "kafka_qos_stream"
+	TypeKafkaQosPlay   = "kafka_qos_play"
 )
 
 type Label struct {
@@ -62,6 +63,7 @@ func NewParserRegistry() *ParserRegistry {
 	ps.RegisterParser(TypeJson, NewJsonParser)
 	ps.RegisterParser(TypeNginx, NewNginxParser)
 	ps.RegisterParser(TypeKafkaQosStream, NewKafkaQosStreamParser)
+	ps.RegisterParser(TypeKafkaQosPlay, NewKafkaQosPlayParser)
 	return ps
 }
 

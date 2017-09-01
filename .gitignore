@@ -45,9 +45,18 @@ _testmain.go
 *.test
 *.prof
 
-vendor/*/
+!vendor/
+vendor/*
+!vendor/github.com/
+vendor/github.com/*
+!vendor/github.com/labstack/
+vendor/github.com/labstack/*
+!vendor/github.com/labstack/echo/
+!vendor/github.com/wangtuanjie/
 .DS_Store
 .cache
 .vscode
 logkit
 stats
+.logkitconfs/
+public/.project

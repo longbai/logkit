@@ -11,11 +11,13 @@ import (
 	_ "github.com/qiniu/logkit/metric/all"
 	"github.com/qiniu/logkit/mgr"
 	"github.com/qiniu/logkit/times"
+	_ "github.com/qiniu/logkit/transforms/all"
 	"github.com/qiniu/logkit/utils"
 
 	"net/http"
 	_ "net/http/pprof"
 
+	"github.com/labstack/echo"
 	"github.com/qiniu/log"
 )
 
@@ -23,7 +25,6 @@ import (
 type Config struct {
 	MaxProcs         int      `json:"max_procs"`
 	DebugLevel       int      `json:"debug_level"`
-	BindHost         string   `json:"bind_host"`
 	ProfileHost      string   `json:"profile_host"`
 	ConfsPath        []string `json:"confs_path"`
 	CleanSelfLog     bool     `json:"clean_self_log"`
@@ -31,13 +32,14 @@ type Config struct {
 	CleanSelfPattern string   `json:"clean_self_pattern"`
 	TimeLayouts      []string `json:"timeformat_layouts"`
 	CleanSelfLogCnt  int      `json:"clean_self_cnt"`
+	StaticRootPath   string   `json:"static_root_path"`
 	mgr.ManagerConfig
 }
 
 var conf Config
 
 const (
-	Version           = "v1.2.2"
+	Version           = "v1.2.3"
 	defaultReserveCnt = 5
 	defaultLogDir     = "./run"
 	defaultLogPattern = "*.log-*"
@@ -105,6 +107,8 @@ func loopCleanLogkitLog(dir, pattern string, reserveCnt int, exitchan chan struc
 	}
 }
 
+//！！！注意： 自动生成 grok pattern代码，下述注释请勿删除！！！
+//go:generate go run generators/grok_pattern_generater.go
 func main() {
 	config.Init("f", "qbox", "qboxlogexporter.conf")
 	if err := config.Load(&conf); err != nil {
@@ -126,11 +130,13 @@ func main() {
 	}
 	paths := getValidPath(conf.ConfsPath)
 	if len(paths) <= 0 {
-		log.Fatalf("Cannot read or create any ConfsPath %v", conf.ConfsPath)
+		log.Warnf("Cannot read or create any ConfsPath %v", conf.ConfsPath)
 	}
 	if err = m.Watch(paths); err != nil {
 		log.Fatalf("watch path error %v", err)
 	}
+	m.RestoreWebDir()
+
 	stopClean := make(chan struct{}, 0)
 	defer close(stopClean)
 	if conf.CleanSelfLog {
@@ -139,8 +145,11 @@ func main() {
 	if len(conf.BindHost) > 0 {
 		m.BindHost = conf.BindHost
 	}
+	e := echo.New()
+	e.Static("/", conf.StaticRootPath)
+
 	// start rest service
-	rs := mgr.NewRestService(m)
+	rs := mgr.NewRestService(m, e)
 	if conf.ProfileHost != "" {
 		log.Printf("profile_host was open at %v", conf.ProfileHost)
 		go func() {

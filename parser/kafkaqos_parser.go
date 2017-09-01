@@ -221,7 +221,7 @@ func (krp *KafkaQosStreamParser) parseStreamEndEvent(data []string) (e *StreamEv
 	event.SignalDb, _ = strconv.ParseInt(data[35], 10, 64)
 	event.SignalLevel, _ = strconv.ParseInt(data[36], 10, 64)
 	event.ErrorCode, _ = strconv.ParseInt(data[41], 10, 64)
-	event.ErrorOscode, _ = strconv.ParseInt(data[41], 10, 64)
+	event.ErrorOscode, _ = strconv.ParseInt(data[42], 10, 64)
 
 	if strings.Contains(event.Device, "-") {
 		event.OS = "iOS"
