@@ -183,7 +183,7 @@ func (krp *KafkaQosStreamParser) parseStreamStartEvent(data []string) (e *Stream
 }
 
 func (krp *KafkaQosStreamParser) parseStreamEndEvent(data []string) (e *StreamEvent, err error) {
-	if data == nil || len(data) < 42 {
+	if data == nil || len(data) < 43 {
 		return nil, fmt.Errorf("not enough data")
 	}
 	if data[1] != "stream_end.v5" {
@@ -206,6 +206,7 @@ func (krp *KafkaQosStreamParser) parseStreamEndEvent(data []string) (e *StreamEv
 	event.VideoBufferSentFrames, _ = strconv.ParseInt(data[13], 10, 64)
 	event.VideoBufferDroppedFrames, _ = strconv.ParseInt(data[14], 10, 64)
 	event.AudioBufferSentFrames, _ = strconv.ParseInt(data[15], 10, 64)
+
 	event.DeviceModel = data[19]
 	event.OsPlatform = data[20]
 	event.OsVersion = data[21]

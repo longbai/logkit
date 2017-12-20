@@ -195,7 +195,7 @@ func (krp *KafkaQosPlayParser) parsePlayStartEvent(data []string) (e *PlayEvent,
 //171.41.69.17	play_end.v5	1504250401045	1503145461301629	1.5.1	http	flv.live-baidu.rela.me	/live/101059696.flv	-	flv.live-baidu.rela.me	1504250386897	1504250401045	0	0 1559514	0	2999	vivo_X9	Android	6.0.1	com.thel	4.0.2	0.378	0.178	0.630	0.052	ffmpeg-3.2;PLDroidPlayer-1.5.1	60	WIFI	192.168.1.103	8.8.8.8	"luckywan"	-	-6300	0	0	-	0	0
 //112.96.173.42	play_end.v5	1504250395823	1501257229489135	1.5.1	http	114.55.127.136	/g15695073s0t1504250339644u5953981i17.flv	-	114.55.127.136	1504250335947	1504250395822	0	0	1822465	0	1002	XiaomiMI_MAX_2	Android	7.1.1	com.sdbean.werewolf	2.07	0.325	0.133	0.777	0.037	ffmpeg-3.2;PLDroidPlayer-1.5.1	60	LTE	10.179.133.142	221.5.88.88	-	-	0	0	0	0	0	-	0	0
 func (krp *KafkaQosPlayParser) parsePlayEndEvent(data []string) (e *PlayEvent, err error) {
-	if data == nil || len(data) < 36 {
+	if data == nil || len(data) < 37 {
 		return nil, fmt.Errorf("not enough data")
 	}
 	if data[1] != "play_end.v5" {
