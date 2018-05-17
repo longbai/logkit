@@ -2,25 +2,25 @@ package reader
 
 import (
 	"database/sql"
-	"encoding/json"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/qiniu/log"
-	"github.com/robfig/cron"
-
-	"reflect"
-
-	"encoding/binary"
+	"github.com/qiniu/logkit/conf"
+	"github.com/qiniu/logkit/utils"
 
 	_ "github.com/denisenkom/go-mssqldb" //mssql 驱动
 	_ "github.com/go-sql-driver/mysql"   //mysql 驱动
-	"github.com/qiniu/logkit/conf"
+	"github.com/json-iterator/go"
+	_ "github.com/lib/pq" //postgres 驱动
+	"github.com/qiniu/log"
+	"github.com/robfig/cron"
 )
 
 const (
@@ -50,13 +50,18 @@ type SqlReader struct {
 	mux     sync.Mutex
 	started bool
 
-	execOnStart bool
+	execOnStart  bool
+	loop         bool
+	loopDuration time.Duration
+
+	stats     utils.StatsInfo
+	statsLock sync.RWMutex
 }
 
 const (
 	StatusInit int32 = iota
 	StatusStopped
-	StatusStoping
+	StatusStopping
 	StatusRunning
 )
 
@@ -110,6 +115,49 @@ func NewSQLReader(meta *Meta, conf conf.MapConf) (mr *SqlReader, err error) {
 		}
 		cronSchedule, _ = conf.GetStringOr(KeyMssqlCron, "")
 		execOnStart, _ = conf.GetBoolOr(KeyMssqlExecOnStart, true)
+	case ModePG:
+		readBatch, _ = conf.GetIntOr(KeyPGsqlReadBatch, 100)
+		offsetKey, _ = conf.GetStringOr(KeyPGsqlOffsetKey, "")
+		dataSource, err = conf.GetString(KeyPGsqlDataSource)
+		if err != nil {
+			dataSource = logpath
+			if logpath == "" {
+				return nil, err
+			}
+			err = nil
+		}
+		sps := strings.Split(dataSource, " ")
+		for _, v := range sps {
+			v = strings.TrimSpace(v)
+			if v == "" {
+				continue
+			}
+			x1s := strings.Split(v, "=")
+			if len(x1s) != 2 {
+				err = fmt.Errorf("datasource %v is invalid, don't contain space beside symbol '='", dataSource)
+				return
+			}
+		}
+		database, err = conf.GetString(KeyPGsqlDataBase)
+		if err != nil {
+			got := false
+			for _, v := range sps {
+				if strings.Contains(v, "dbname") {
+					database = strings.TrimPrefix(v, "dbname=")
+					got = true
+					break
+				}
+			}
+			if !got {
+				return nil, err
+			}
+		}
+		rawSqls, err = conf.GetString(KeyPGsqlSQL)
+		if err != nil {
+			return nil, err
+		}
+		cronSchedule, _ = conf.GetStringOr(KeyPGsqlCron, "")
+		execOnStart, _ = conf.GetBoolOr(KeyPGsqlExecOnStart, true)
 	default:
 		err = fmt.Errorf("%v mode not support in sql reader", dbtype)
 		return
@@ -138,6 +186,7 @@ func NewSQLReader(meta *Meta, conf conf.MapConf) (mr *SqlReader, err error) {
 		started:     false,
 		execOnStart: execOnStart,
 		schemas:     schemas,
+		statsLock:   sync.RWMutex{},
 	}
 	// 如果meta初始信息损坏
 	if !omitMeta {
@@ -147,11 +196,22 @@ func NewSQLReader(meta *Meta, conf conf.MapConf) (mr *SqlReader, err error) {
 	}
 	//schedule    string     //定时任务配置串
 	if len(cronSchedule) > 0 {
-		err = mr.Cron.AddFunc(cronSchedule, mr.run)
-		if err != nil {
-			return
+		cronSchedule = strings.ToLower(cronSchedule)
+		if strings.HasPrefix(cronSchedule, Loop) {
+			mr.loop = true
+			mr.loopDuration, err = parseLoopDuration(cronSchedule)
+			if err != nil {
+				log.Errorf("Runner[%v] %v %v", mr.meta.RunnerName, mr.Name(), err)
+				err = nil
+			}
+		} else {
+			err = mr.Cron.AddFunc(cronSchedule, mr.run)
+			if err != nil {
+				return
+			}
+			log.Infof("Runner[%v] %v Cron job added with schedule <%v>", mr.meta.RunnerName, mr.Name(), cronSchedule)
 		}
-		log.Infof("Runner[%v] %v Cron job added with schedule <%v>", mr.meta.RunnerName, mr.Name(), cronSchedule)
+
 	}
 	return mr, nil
 }
@@ -267,16 +327,29 @@ func goMagic(rawSql string, now time.Time) (ret string) {
 }
 
 func (mr *SqlReader) Name() string {
-	return strings.ToUpper(mr.dbtype) + "_Reader:" + mr.database + "_" + hash(mr.rawsqls)
+	return strings.ToUpper(mr.dbtype) + "_Reader:" + mr.database + "_" + utils.Hash(mr.rawsqls)
+}
+
+func (mr *SqlReader) setStatsError(err string) {
+	mr.statsLock.Lock()
+	defer mr.statsLock.Unlock()
+	mr.stats.LastError = err
+}
+
+func (mr *SqlReader) Status() utils.StatsInfo {
+	mr.statsLock.RLock()
+	defer mr.statsLock.RUnlock()
+	return mr.stats
 }
 
 func (mr *SqlReader) Source() string {
-	return mr.datasource + "_" + mr.database
+	//不能把DataSource弄出去，包含密码
+	return mr.dbtype + "_" + mr.database
 }
 
 func (mr *SqlReader) Close() (err error) {
 	mr.Cron.Stop()
-	if atomic.CompareAndSwapInt32(&mr.status, StatusRunning, StatusStoping) {
+	if atomic.CompareAndSwapInt32(&mr.status, StatusRunning, StatusStopping) {
 		log.Infof("Runner[%v] %v stopping", mr.meta.RunnerName, mr.Name())
 	} else {
 		close(mr.readChan)
@@ -291,9 +364,13 @@ func (mr *SqlReader) Start() {
 	if mr.started {
 		return
 	}
-	mr.Cron.Start()
-	if mr.execOnStart {
-		go mr.run()
+	if mr.loop {
+		go mr.LoopRun()
+	} else {
+		mr.Cron.Start()
+		if mr.execOnStart {
+			go mr.run()
+		}
 	}
 	mr.started = true
 	log.Infof("Runner[%v] %v pull data deamon started", mr.meta.RunnerName, mr.Name())
@@ -342,6 +419,17 @@ func (mr *SqlReader) updateOffsets(sqls []string) {
 	}
 }
 
+func (mr *SqlReader) LoopRun() {
+	for {
+		if atomic.LoadInt32(&mr.status) == StatusStopped {
+			return
+		}
+		//run 函数里面处理stopping的逻辑
+		mr.run()
+		time.Sleep(mr.loopDuration)
+	}
+}
+
 func (mr *SqlReader) run() {
 	var err error
 	// 防止并发run
@@ -353,10 +441,11 @@ func (mr *SqlReader) run() {
 			break
 		}
 	}
-	// running在退出状态改为Init
+	// running时退出 状态改为Init，以便 cron 调度下次运行
+	// stopping时推出改为 stopped，不再运行
 	defer func() {
 		atomic.CompareAndSwapInt32(&mr.status, StatusRunning, StatusInit)
-		if atomic.CompareAndSwapInt32(&mr.status, StatusStoping, StatusStopped) {
+		if atomic.CompareAndSwapInt32(&mr.status, StatusStopping, StatusStopped) {
 			close(mr.readChan)
 		}
 		if err == nil {
@@ -366,14 +455,27 @@ func (mr *SqlReader) run() {
 
 	var connectStr string
 	switch mr.dbtype {
-	case "mysql":
+	case ModeMysql:
 		connectStr = mr.datasource + "/" + mr.database
-	case "mssql":
+	case ModeMssql:
 		connectStr = mr.datasource + ";database=" + mr.database
+	case ModePG:
+		spls := strings.Split(mr.datasource, " ")
+		contains := false
+		for idx, v := range spls {
+			if strings.Contains(v, "dbname") {
+				contains = true
+				spls[idx] = "dbname=" + mr.database
+			}
+		}
+		if !contains {
+			spls = append(spls, "dbname="+mr.database)
+		}
+		connectStr = strings.Join(spls, " ")
 	}
 	// 开始work逻辑
 	for {
-		if atomic.LoadInt32(&mr.status) == StatusStoping {
+		if atomic.LoadInt32(&mr.status) == StatusStopping {
 			log.Warnf("Runner[%v] %v stopped from running", mr.meta.RunnerName, mr.Name())
 			return
 		}
@@ -383,16 +485,73 @@ func (mr *SqlReader) run() {
 			return
 		}
 		log.Error(err)
+		mr.setStatsError(err.Error())
 		time.Sleep(3 * time.Second)
 	}
 }
 
-func getInitScans(length int) []interface{} {
-	scanArgs := make([]interface{}, length)
+func (mr *SqlReader) getInitScans(length int, rows *sql.Rows, sqltype string) (scanArgs []interface{}, nochoiced []bool) {
+	nochoice := make([]interface{}, length)
+	nochoiced = make([]bool, length)
 	for i := range scanArgs {
-		scanArgs[i] = new(interface{})
+		nochoice[i] = new(interface{})
+		nochoiced[i] = true
 	}
-	return scanArgs
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error("Recovered in f", r)
+			scanArgs = nochoice
+			return
+		}
+	}()
+
+	tps, err := rows.ColumnTypes()
+	if err != nil {
+		log.Error(err)
+		scanArgs = nochoice
+	}
+	if len(tps) != length {
+		log.Errorf("getInitScans length is %v not equal to columetypes %v", length, len(tps))
+		scanArgs = nochoice
+	}
+	scanArgs = make([]interface{}, length)
+	for i, v := range tps {
+		nochoiced[i] = false
+		scantype := v.ScanType().Name()
+		switch scantype {
+		case "int64", "int32", "int16", "int", "int8":
+			scanArgs[i] = new(int64)
+		case "float32", "float64":
+			scanArgs[i] = new(float64)
+		case "uint", "uint8", "uint16", "uint32", "uint64":
+			scanArgs[i] = new(uint64)
+		case "bool":
+			scanArgs[i] = new(bool)
+		case "[]uint8":
+			scanArgs[i] = new([]byte)
+		case "string", "RawBytes", "time.Time", "NullTime":
+			//时间类型也作为string处理
+			scanArgs[i] = new(interface{})
+			if _, ok := mr.schemas[v.Name()]; !ok {
+				mr.schemas[v.Name()] = "string"
+			}
+		case "NullInt64":
+			scanArgs[i] = new(interface{})
+			if _, ok := mr.schemas[v.Name()]; !ok {
+				mr.schemas[v.Name()] = "long"
+			}
+		case "NullFloat64":
+			scanArgs[i] = new(interface{})
+			if _, ok := mr.schemas[v.Name()]; !ok {
+				mr.schemas[v.Name()] = "float"
+			}
+		default:
+			scanArgs[i] = new(interface{})
+			nochoiced[i] = true
+		}
+		log.Infof("Init field %v scan type is %v ", v.Name(), scantype)
+	}
+	return
 }
 
 func (mr *SqlReader) getOffsetIndex(columns []string) int {
@@ -447,8 +606,9 @@ func (mr *SqlReader) exec(connectStr string) (err error) {
 				continue
 			}
 			log.Infof("Runner[%v] SQL ：<%v>, schemas: <%v>", mr.meta.RunnerName, execSQL, strings.Join(columns, ", "))
-			scanArgs := getInitScans(len(columns))
+			scanArgs, nochiced := mr.getInitScans(len(columns), rows, mr.dbtype)
 			offsetKeyIndex := mr.getOffsetIndex(columns)
+
 			// Fetch rows
 			var maxOffset int64 = -1
 			for rows.Next() {
@@ -462,33 +622,76 @@ func (mr *SqlReader) exec(connectStr string) (err error) {
 				data := make(map[string]interface{})
 				for i := 0; i < len(scanArgs); i++ {
 					vtype, ok := mr.schemas[columns[i]]
-					if ok {
-						switch vtype {
-						case "long":
-							val, serr := convertLong(scanArgs[i])
-							if serr != nil {
-								log.Errorf("convertLong for %v (%v) error %v, ignore this key...", columns[i], scanArgs[i], serr)
-							} else {
-								data[columns[i]] = &val
+					if !ok {
+						vtype = "unknown"
+					}
+					switch vtype {
+					case "long":
+						val, serr := convertLong(scanArgs[i])
+						if serr != nil {
+							log.Errorf("convertLong for %v (%v) error %v, ignore this key...", columns[i], scanArgs[i], serr)
+						} else {
+							data[columns[i]] = &val
+						}
+					case "float":
+						val, serr := convertFloat(scanArgs[i])
+						if serr != nil {
+							log.Errorf("convertFloat for %v (%v) error %v, ignore this key...", columns[i], scanArgs[i], serr)
+						} else {
+							data[columns[i]] = &val
+						}
+					case "string":
+						val, serr := convertString(scanArgs[i])
+						if serr != nil {
+							log.Errorf("convertString for %v (%v) error %v, ignore this key...", columns[i], scanArgs[i], serr)
+						} else {
+							data[columns[i]] = &val
+						}
+					default:
+						dealed := false
+						if !nochiced[i] {
+							dealed = true
+							switch d := scanArgs[i].(type) {
+							case *string:
+								data[columns[i]] = *d
+							case *[]byte:
+								data[columns[i]] = string(*d)
+							case *bool:
+								data[columns[i]] = *d
+							case int64:
+								data[columns[i]] = d
+							case *int64:
+								data[columns[i]] = *d
+							case float64:
+								data[columns[i]] = d
+							case *float64:
+								data[columns[i]] = *d
+							case uint64:
+								data[columns[i]] = d
+							case *uint64:
+								data[columns[i]] = *d
+							case *interface{}:
+								dealed = false
+							default:
+								dealed = false
 							}
-						case "float":
-							val, serr := convertFloat(scanArgs[i])
+						}
+						if !dealed {
+							val, serr := convertString(scanArgs[i])
 							if serr != nil {
-								log.Errorf("convertFloat for %v (%v) error %v, ignore this key...", columns[i], scanArgs[i], serr)
+								log.Errorf("convertString for %v (%v) error %v, ignore this key...", columns[i], scanArgs[i], serr)
 							} else {
 								data[columns[i]] = &val
 							}
 						}
-					} else {
-						data[columns[i]] = scanArgs[i]
 					}
 				}
-				ret, err := json.Marshal(data)
+				ret, err := jsoniter.Marshal(data)
 				if err != nil {
 					log.Errorf("Runner[%v] %v unmarshal sql data error %v", mr.meta.RunnerName, mr.Name(), err)
 					continue
 				}
-				if atomic.LoadInt32(&mr.status) == StatusStoping {
+				if atomic.LoadInt32(&mr.status) == StatusStopping {
 					log.Warnf("Runner[%v] %v stopped from running", mr.meta.RunnerName, mr.Name())
 					return nil
 				}
@@ -667,6 +870,68 @@ func convertFloat(v interface{}) (float64, error) {
 	return 0, fmt.Errorf("%v type can not convert to int", dv.Kind())
 }
 
+func convertString(v interface{}) (string, error) {
+	dpv := reflect.ValueOf(v)
+	if dpv.Kind() != reflect.Ptr {
+		return "", errors.New("scanArgs not a pointer")
+	}
+	if dpv.IsNil() {
+		return "", errors.New("scanArgs is a nil pointer")
+	}
+	dv := reflect.Indirect(dpv)
+	switch dv.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return strconv.Itoa(int(dv.Int())), nil
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return strconv.Itoa(int(dv.Uint())), nil
+	case reflect.String:
+		return dv.String(), nil
+	case reflect.Interface:
+		idv := dv.Interface()
+		if ret, ok := idv.(int64); ok {
+			return strconv.Itoa(int(ret)), nil
+		}
+		if ret, ok := idv.(int); ok {
+			return strconv.Itoa(int(ret)), nil
+		}
+		if ret, ok := idv.(uint); ok {
+			return strconv.Itoa(int(ret)), nil
+		}
+		if ret, ok := idv.(uint64); ok {
+			return strconv.Itoa(int(ret)), nil
+		}
+		if ret, ok := idv.(string); ok {
+			return ret, nil
+		}
+		if ret, ok := idv.(int8); ok {
+			return strconv.Itoa(int(ret)), nil
+		}
+		if ret, ok := idv.(int16); ok {
+			return strconv.Itoa(int(ret)), nil
+		}
+		if ret, ok := idv.(int32); ok {
+			return strconv.Itoa(int(ret)), nil
+		}
+		if ret, ok := idv.(uint8); ok {
+			return strconv.Itoa(int(ret)), nil
+		}
+		if ret, ok := idv.(uint16); ok {
+			return strconv.Itoa(int(ret)), nil
+		}
+		if ret, ok := idv.(uint32); ok {
+			return strconv.Itoa(int(ret)), nil
+		}
+		if ret, ok := idv.([]byte); ok {
+			return string(ret), nil
+		}
+		if idv == nil {
+			return "", nil
+		}
+		log.Errorf("sql reader convertString for type %v is not supported", reflect.TypeOf(idv))
+	}
+	return "", fmt.Errorf("%v type can not convert to string", dv.Kind())
+}
+
 func (mr *SqlReader) getSQL(idx int) (sql string, err error) {
 	rawSQL := mr.syncSQLs[idx]
 	rawSQL = strings.TrimSuffix(strings.TrimSpace(rawSQL), ";")
@@ -681,6 +946,13 @@ func (mr *SqlReader) getSQL(idx int) (sql string, err error) {
 	case ModeMssql:
 		if len(mr.offsetKey) > 0 {
 			sql = fmt.Sprintf("%s WHERE CAST(%v AS BIGINT) >= %d AND CAST(%v AS BIGINT) < %d;", rawSQL, mr.offsetKey, mr.offsets[idx], mr.offsetKey, mr.offsets[idx]+int64(mr.readBatch))
+		} else {
+			err = fmt.Errorf("%v dbtype is not support get SQL without id now", mr.dbtype)
+		}
+		return
+	case ModePG:
+		if len(mr.offsetKey) > 0 {
+			sql = fmt.Sprintf("%s WHERE %v >= %d AND %v < %d;", rawSQL, mr.offsetKey, mr.offsets[idx], mr.offsetKey, mr.offsets[idx]+int64(mr.readBatch))
 		} else {
 			err = fmt.Errorf("%v dbtype is not support get SQL without id now", mr.dbtype)
 		}
@@ -720,7 +992,7 @@ func (mr *SqlReader) checkExit(idx int, db *sql.DB) (bool, int64) {
 		return true, -1
 	}
 
-	scanArgs := getInitScans(len(columns))
+	scanArgs, _ := mr.getInitScans(len(columns), rows, mr.dbtype)
 	offsetKeyIndex := mr.getOffsetIndex(columns)
 	for rows.Next() {
 		err = rows.Scan(scanArgs...)

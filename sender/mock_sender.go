@@ -1,11 +1,11 @@
 package sender
 
 import (
-	"encoding/json"
-
 	"sync"
 
+	"github.com/json-iterator/go"
 	"github.com/qiniu/logkit/conf"
+	. "github.com/qiniu/logkit/utils/models"
 )
 
 // mock sender is used for debug
@@ -30,7 +30,9 @@ func NewMockSender(c conf.MapConf) (Sender, error) {
 
 //Name function will return the name and datas recieved as string
 func (mock *MockSender) Name() string {
-	raw, err := json.Marshal(mock.datas)
+	mock.mux.Lock()
+	defer mock.mux.Unlock()
+	raw, err := jsoniter.Marshal(mock.datas)
 	if err != nil {
 		raw = []byte(err.Error())
 	}

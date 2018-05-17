@@ -2,7 +2,7 @@ package mgr
 
 import (
 	"encoding/base64"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"net"
@@ -11,45 +11,73 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/labstack/echo"
 	"github.com/qiniu/log"
 	"github.com/qiniu/logkit/conf"
 	"github.com/qiniu/logkit/parser"
+	"github.com/qiniu/logkit/utils"
+	. "github.com/qiniu/logkit/utils/models"
+
+	"github.com/json-iterator/go"
+	"github.com/labstack/echo"
 )
 
-var DEFAULT_PORT = 4000
+var DEFAULT_PORT = 3000
 
 const (
 	StatsShell = "stats"
 	PREFIX     = "/logkit"
 )
 
-type cmdArgs struct {
-	CmdArgs []string
-}
-
 type RestService struct {
 	mgr     *Manager
 	l       net.Listener
+	cluster *Cluster
 	address string
 }
 
 func NewRestService(mgr *Manager, router *echo.Echo) *RestService {
 
-	rs := &RestService{
-		mgr: mgr,
+	if mgr.Cluster.Enable {
+		if !mgr.Cluster.IsMaster && len(mgr.Cluster.MasterUrl) < 1 {
+			log.Fatalf("cluster is enabled but master url is empty")
+		}
+		for i := range mgr.Cluster.MasterUrl {
+			if !strings.HasPrefix(mgr.Cluster.MasterUrl[i], "http://") {
+				mgr.Cluster.MasterUrl[i] = "http://" + mgr.Cluster.MasterUrl[i]
+			}
+		}
 	}
+
+	rs := &RestService{
+		mgr:     mgr,
+		cluster: NewCluster(&mgr.Cluster),
+	}
+	rs.cluster.mutex = new(sync.RWMutex)
 	router.GET(PREFIX+"/status", rs.Status())
+
+	// error code humanize
+	router.GET(PREFIX+"/errorcode", rs.GetErrorCodeHumanize())
+
+	//configs API
 	router.GET(PREFIX+"/configs", rs.GetConfigs())
 	router.GET(PREFIX+"/configs/:name", rs.GetConfig())
 	router.POST(PREFIX+"/configs/:name", rs.PostConfig())
+	router.POST(PREFIX+"/configs/:name/stop", rs.PostConfigStop())
+	router.POST(PREFIX+"/configs/:name/start", rs.PostConfigStart())
+	router.POST(PREFIX+"/configs/:name/reset", rs.PostConfigReset())
+	router.PUT(PREFIX+"/configs/:name", rs.PutConfig())
 	router.DELETE(PREFIX+"/configs/:name", rs.DeleteConfig())
+
+	// runners API
+	router.GET(PREFIX+"/runners", rs.GetRunners())
 
 	//reader API
 	router.GET(PREFIX+"/reader/usages", rs.GetReaderUsages())
 	router.GET(PREFIX+"/reader/options", rs.GetReaderKeyOptions())
+	router.POST(PREFIX+"/reader/read", rs.PostRead())
 	router.POST(PREFIX+"/reader/check", rs.PostReaderCheck())
 
 	//parser API
@@ -59,25 +87,67 @@ func NewRestService(mgr *Manager, router *echo.Echo) *RestService {
 	router.GET(PREFIX+"/parser/samplelogs", rs.GetParserSampleLogs())
 	router.POST(PREFIX+"/parser/check", rs.PostParserCheck())
 
+	//transformer API
+	router.GET(PREFIX+"/transformer/usages", rs.GetTransformerUsages())
+	router.GET(PREFIX+"/transformer/options", rs.GetTransformerOptions())
+	router.GET(PREFIX+"/transformer/sampleconfigs", rs.GetTransformerSampleConfigs())
+	router.POST(PREFIX+"/transformer/transform", rs.PostTransform())
+	router.POST(PREFIX+"/transformer/check", rs.PostTransformerCheck())
+
 	//sender API
 	router.GET(PREFIX+"/sender/usages", rs.GetSenderUsages())
 	router.GET(PREFIX+"/sender/options", rs.GetSenderKeyOptions())
+	router.POST(PREFIX+"/sender/send", rs.PostSend())
 	router.POST(PREFIX+"/sender/check", rs.PostSenderCheck())
+	router.GET(PREFIX+"/sender/router/usage", rs.GetSenderRouterUsage())
+	router.GET(PREFIX+"/sender/router/option", rs.GetSenderRouterOption())
+
+	//metric API
+	router.GET(PREFIX+"/metric/keys", rs.GetMetricKeys())
+	router.GET(PREFIX+"/metric/usages", rs.GetMetricUsages())
+	router.GET(PREFIX+"/metric/options", rs.GetMetricOptions())
+
+	//version
+	router.GET(PREFIX+"/version", rs.GetVersion())
+
+	//cluster API
+	router.GET(PREFIX+"/cluster/ping", rs.Ping())
+	router.GET(PREFIX+"/cluster/ismaster", rs.IsMaster())
+	router.POST(PREFIX+"/cluster/register", rs.PostRegister())
+	router.POST(PREFIX+"/cluster/tag", rs.PostTag())
+	router.GET(PREFIX+"/cluster/slaves", rs.Slaves())
+	router.DELETE(PREFIX+"/cluster/slaves", rs.DeleteSlaves())
+	router.POST(PREFIX+"/cluster/slaves/tag", rs.PostSlaveTag())
+	router.GET(PREFIX+"/cluster/status", rs.ClusterStatus())
+	router.GET(PREFIX+"/cluster/runners", rs.GetClusterRunners())
+	router.GET(PREFIX+"/cluster/configs", rs.GetClusterConfigs())
+	router.GET(PREFIX+"/cluster/configs/:name", rs.GetClusterConfig())
+	router.POST(PREFIX+"/cluster/configs/:name", rs.PostClusterConfig())
+	router.PUT(PREFIX+"/cluster/configs/:name", rs.PutClusterConfig())
+	router.DELETE(PREFIX+"/cluster/configs/:name", rs.DeleteClusterConfig())
+	router.POST(PREFIX+"/cluster/configs/:name/stop", rs.PostClusterConfigStop())
+	router.POST(PREFIX+"/cluster/configs/:name/start", rs.PostClusterConfigStart())
+	router.POST(PREFIX+"/cluster/configs/:name/reset", rs.PostClusterConfigReset())
 
 	var (
-		port     = DEFAULT_PORT
-		address  string
-		listener net.Listener
-		err      error
+		port       = DEFAULT_PORT
+		address    string
+		listener   net.Listener
+		err        error
+		httpschema = "http://"
 	)
 
 	for {
 		if port > 10000 {
 			log.Fatal("bind port failed too many times, exit...")
 		}
+		if mgr.DisableWeb {
+			break
+		}
+
 		address = ":" + strconv.Itoa(port)
 		if mgr.BindHost != "" {
-			address = mgr.BindHost
+			address, httpschema = utils.RemoveHttpProtocal(mgr.BindHost)
 		}
 		listener, err = httpserve(address, router)
 		if err != nil {
@@ -94,12 +164,36 @@ func NewRestService(mgr *Manager, router *echo.Echo) *RestService {
 	}
 	rs.l = listener
 	log.Infof("successfully start RestService and bind address on %v", address)
-	err = generateStatsShell(address, PREFIX)
-	if err != nil {
-		log.Warn(err)
+	if !mgr.DisableWeb {
+		err = generateStatsShell(address, PREFIX)
+		if err != nil {
+			log.Warn(err)
+		}
 	}
 	rs.address = address
+	if rs.cluster.Enable {
+		if rs.cluster.Address == "" {
+			rs.cluster.Address, err = GetMySlaveUrl(address, httpschema)
+			if err != nil {
+				log.Fatalf("get slave url bindaddress[%v] error %v", address, err)
+			}
+		}
+	}
 	return rs
+}
+
+func GetMySlaveUrl(address, schema string) (uri string, err error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return
+	}
+	if host == "" {
+		host, err = utils.GetLocalIP()
+		if err != nil {
+			return
+		}
+	}
+	return schema + host + ":" + port, nil
 }
 
 func generateStatsShell(address, prefix string) (err error) {
@@ -112,7 +206,7 @@ func generateStatsShell(address, prefix string) (err error) {
 		err = fmt.Errorf("writefile error %v, address: 127.0.0.1%v%v/status", err, address, prefix)
 		return
 	}
-	err = os.Chmod(StatsShell, 0755)
+	err = os.Chmod(StatsShell, DefaultDirPerm)
 	if err != nil {
 		err = fmt.Errorf("change mode for %v error %v", StatsShell, err)
 		return
@@ -120,42 +214,68 @@ func generateStatsShell(address, prefix string) (err error) {
 	return
 }
 
+func RespError(c echo.Context, respCode int, errCode, errMsg string) error {
+	errInfo := map[string]string{
+		"code":    errCode,
+		"message": errMsg,
+	}
+	return c.JSON(respCode, errInfo)
+}
+
+func RespSuccess(c echo.Context, data interface{}) error {
+	respData := map[string]interface{}{
+		"code": ErrNothing,
+	}
+	if data != nil {
+		respData["data"] = data
+	}
+	return c.JSON(http.StatusOK, respData)
+}
+
 // get /logkit/status
 func (rs *RestService) Status() echo.HandlerFunc {
 	return func(c echo.Context) error {
 		rss := rs.mgr.Status()
-		return c.JSON(http.StatusOK, rss)
+		if rs.cluster.Enable {
+			for k, v := range rss {
+				v.Tag = rs.cluster.Tag
+				v.Url = rs.cluster.Address
+				rss[k] = v
+			}
+		}
+		return RespSuccess(c, rss)
+	}
+}
+
+// get /logkit/runners
+func (rs *RestService) GetRunners() echo.HandlerFunc {
+	return func(c echo.Context) error {
+		runnerNameList := make([]string, 0)
+		rs.mgr.lock.RLock()
+		for _, conf := range rs.mgr.runnerConfig {
+			runnerNameList = append(runnerNameList, conf.RunnerName)
+		}
+		rs.mgr.lock.RUnlock()
+		return RespSuccess(c, runnerNameList)
 	}
 }
 
 // get /logkit/configs
 func (rs *RestService) GetConfigs() echo.HandlerFunc {
 	return func(c echo.Context) error {
-		rs.mgr.lock.RLock()
-		defer rs.mgr.lock.RUnlock()
-		rss := make(map[string]RunnerConfig)
-		for k, v := range rs.mgr.runnerConfig {
-			if filepath.Dir(k) == rs.mgr.RestDir {
-				v.IsInWebFolder = true
-			}
-			rss[k] = v
-		}
-		return c.JSON(http.StatusOK, rss)
+		rss := rs.mgr.Configs()
+		return RespSuccess(c, rss)
 	}
 }
 
 // get /logkit/configs/:name
 func (rs *RestService) GetConfig() echo.HandlerFunc {
 	return func(c echo.Context) error {
-		name := c.Param("name")
-		filename := rs.mgr.RestDir + "/" + name + ".conf"
-		rs.mgr.lock.RLock()
-		defer rs.mgr.lock.RUnlock()
-		rss, ok := rs.mgr.runnerConfig[filename]
-		if name == "" || !ok {
-			return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("config name is empty or file %v not exist", filename))
+		_, runnerConfig, _, err := rs.checkNameAndConfig(c)
+		if err != nil {
+			return RespError(c, http.StatusBadRequest, ErrConfigName, err.Error())
 		}
-		return c.JSON(http.StatusOK, rss)
+		return RespSuccess(c, runnerConfig)
 	}
 }
 
@@ -163,6 +283,7 @@ func convertWebParserConfig(conf conf.MapConf) conf.MapConf {
 	if conf == nil {
 		return conf
 	}
+
 	rawCustomPatterns, _ := conf.GetStringOr(parser.KeyGrokCustomPatterns, "")
 	if rawCustomPatterns != "" {
 		CustomPatterns, err := base64.StdEncoding.DecodeString(rawCustomPatterns)
@@ -171,51 +292,182 @@ func convertWebParserConfig(conf conf.MapConf) conf.MapConf {
 		}
 		conf[parser.KeyGrokCustomPatterns] = string(CustomPatterns)
 	}
+
+	splitter, _ := conf.GetStringOr(parser.KeyCSVSplitter, "")
+	if splitter != "" {
+		splitter = strings.Replace(splitter, "\\t", "\t", -1)
+		conf[parser.KeyCSVSplitter] = splitter
+	}
+
 	return conf
+}
+
+func convertWebTransformerConfig(conf map[string]interface{}) map[string]interface{} {
+	if conf == nil {
+		return conf
+	}
+	//TODO do some pre process
+	return conf
+}
+
+func (rs *RestService) backupRunnerConfig(rconf interface{}, filename string) error {
+	confBytes, err := jsoniter.MarshalIndent(rconf, "", "    ")
+	if err != nil {
+		return fmt.Errorf("runner config %v marshal failed, err is %v", rconf, err)
+	}
+	// 判断默认备份文件夹是否存在，不存在就尝试创建
+	if _, err := os.Stat(rs.mgr.RestDir); err != nil {
+		if os.IsNotExist(err) {
+			if err = os.Mkdir(rs.mgr.RestDir, DefaultDirPerm); err != nil && !os.IsExist(err) {
+				return fmt.Errorf("rest default dir not exists and make dir failed, err is %v", err)
+			}
+		}
+	}
+	return ioutil.WriteFile(filename, confBytes, 0644)
+}
+
+func (rs *RestService) checkNameAndConfig(c echo.Context) (name string, conf RunnerConfig, file string, err error) {
+	if name = c.Param("name"); name == "" {
+		err = errors.New("config name is empty")
+		return
+	}
+	var exist bool
+	var tmpConf RunnerConfig
+	rs.mgr.lock.RLock()
+	defer rs.mgr.lock.RUnlock()
+	file = filepath.Join(rs.mgr.RestDir, name+".conf")
+	if tmpConf, exist = rs.mgr.runnerConfig[file]; !exist {
+		err = errors.New("config " + name + " is not found")
+		return
+	}
+	deepCopy(&conf, &tmpConf)
+	return
 }
 
 // post /logkit/configs/<name>
 func (rs *RestService) PostConfig() echo.HandlerFunc {
 	return func(c echo.Context) (err error) {
-		name := c.Param("name")
-		if name == "" {
-			return echo.NewHTTPError(http.StatusBadRequest, "config name is empty")
+		var name string
+		if name = c.Param("name"); name == "" {
+			errMsg := "runner name is empty"
+			return RespError(c, http.StatusBadRequest, ErrRunnerAdd, errMsg)
 		}
-
 		var nconf RunnerConfig
 		if err = c.Bind(&nconf); err != nil {
-			return err
+			return RespError(c, http.StatusBadRequest, ErrRunnerAdd, err.Error())
 		}
-		filename := rs.mgr.RestDir + "/" + nconf.RunnerName + ".conf"
-		if rs.mgr.isRunning(filename) {
-			return echo.NewHTTPError(http.StatusBadRequest, "file "+filename+" runner is running")
-		}
-		nconf.ParserConf = convertWebParserConfig(nconf.ParserConf)
 		nconf.IsInWebFolder = true
-		err = rs.mgr.ForkRunner(filename, nconf, true)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		nconf.ParserConf = convertWebParserConfig(nconf.ParserConf)
+		if err = rs.mgr.AddRunner(name, nconf); err != nil {
+			return RespError(c, http.StatusBadRequest, ErrRunnerAdd, err.Error())
 		}
-		confBytes, err := json.Marshal(nconf)
-		err = ioutil.WriteFile(filename, confBytes, 0644)
-		return
+		return RespSuccess(c, nil)
+	}
+}
+
+// put /logkit/configs/<name>
+func (rs *RestService) PutConfig() echo.HandlerFunc {
+	return func(c echo.Context) (err error) {
+		var name string
+		if name = c.Param("name"); name == "" {
+			errMsg := "config name is empty"
+			return RespError(c, http.StatusBadRequest, ErrRunnerUpdate, errMsg)
+		}
+		var nconf RunnerConfig
+		if err = c.Bind(&nconf); err != nil {
+			return RespError(c, http.StatusBadRequest, ErrRunnerUpdate, err.Error())
+		}
+		nconf.IsInWebFolder = true
+		nconf.ParserConf = convertWebParserConfig(nconf.ParserConf)
+		if err = rs.mgr.UpdateRunner(name, nconf); err != nil {
+			return RespError(c, http.StatusBadRequest, ErrRunnerUpdate, err.Error())
+		}
+		return RespSuccess(c, nil)
+	}
+}
+
+// POST /logkit/configs/<name>/reset
+func (rs *RestService) PostConfigReset() echo.HandlerFunc {
+	return func(c echo.Context) (err error) {
+		var name string
+		if name = c.Param("name"); name == "" {
+			errMsg := "config name is empty"
+			return RespError(c, http.StatusBadRequest, ErrRunnerReset, errMsg)
+		}
+		if err = rs.mgr.ResetRunner(name); err != nil {
+			return RespError(c, http.StatusBadRequest, ErrRunnerReset, err.Error())
+		}
+		return RespSuccess(c, nil)
+	}
+}
+
+// POST /logkit/configs/<name>/start
+func (rs *RestService) PostConfigStart() echo.HandlerFunc {
+	return func(c echo.Context) (err error) {
+		var name string
+		if name = c.Param("name"); name == "" {
+			errMsg := "config name is empty"
+			return RespError(c, http.StatusBadRequest, ErrRunnerStart, errMsg)
+		}
+		if err = rs.mgr.StartRunner(name); err != nil {
+			return RespError(c, http.StatusBadRequest, ErrRunnerStart, err.Error())
+		}
+		return RespSuccess(c, nil)
+	}
+}
+
+// POST /logkit/configs/<name>/stop
+func (rs *RestService) PostConfigStop() echo.HandlerFunc {
+	return func(c echo.Context) (err error) {
+		var name string
+		if name = c.Param("name"); name == "" {
+			errMsg := "config name is empty"
+			return RespError(c, http.StatusBadRequest, ErrRunnerStop, errMsg)
+		}
+		if err = rs.mgr.StopRunner(name); err != nil {
+			return RespError(c, http.StatusBadRequest, ErrRunnerStop, err.Error())
+		}
+		return RespSuccess(c, nil)
 	}
 }
 
 // delete /logkit/configs/<name>
 func (rs *RestService) DeleteConfig() echo.HandlerFunc {
-	return func(c echo.Context) error {
-		name := c.Param("name")
-		if name == "" {
-			return echo.NewHTTPError(http.StatusBadRequest, "config name is empty")
+	return func(c echo.Context) (err error) {
+		var name string
+		if name = c.Param("name"); name == "" {
+			errMsg := "config name is empty"
+			return RespError(c, http.StatusBadRequest, ErrRunnerDelete, errMsg)
 		}
-		filename := rs.mgr.RestDir + "/" + name + ".conf"
-		err := rs.mgr.Remove(filename)
-		if err != nil {
-			return err
+		if err = rs.mgr.DeleteRunner(name); err != nil {
+			return RespError(c, http.StatusBadRequest, ErrRunnerDelete, err.Error())
 		}
-		return os.Remove(filename)
+		return RespSuccess(c, nil)
 	}
+}
+
+// get /logkit/errorcode
+func (rs *RestService) GetErrorCodeHumanize() echo.HandlerFunc {
+	return func(c echo.Context) error {
+		return RespSuccess(c, ErrorCodeHumanize)
+	}
+}
+
+type Version struct {
+	Version string `json:"version"`
+}
+
+func (rs *RestService) GetVersion() echo.HandlerFunc {
+	return func(c echo.Context) error {
+		return RespSuccess(c, &Version{Version: rs.mgr.Version})
+	}
+}
+
+func (rs *RestService) Register() error {
+	if rs.cluster.Enable {
+		return rs.cluster.RunRegisterLoop()
+	}
+	return nil
 }
 
 // Stop will stop RestService

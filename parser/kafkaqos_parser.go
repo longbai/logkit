@@ -10,10 +10,11 @@ import (
 	"github.com/linkedin/goavro"
 	// "github.com/qiniu/log"
 	"github.com/qiniu/logkit/conf"
-	"github.com/qiniu/logkit/sender"
 	// "github.com/qiniu/logkit/times"
 
 	"github.com/wangtuanjie/ip17mon"
+
+	"github.com/qiniu/logkit/utils/models"
 )
 
 // const (
@@ -290,8 +291,8 @@ func (krp *KafkaQosStreamParser) parseStreamEvent(data []string) (e *StreamEvent
 	return &event, nil
 }
 
-func streamEventToSenderData(e *StreamEvent) sender.Data {
-	d := sender.Data{}
+func streamEventToSenderData(e *StreamEvent) models.Data {
+	d := models.Data{}
 	d["client_ip"] = e.ClientIp
 	d["tag"] = e.Tag
 	d["client_time"] = e.ClientTime.Format(time.RFC3339)
@@ -324,8 +325,8 @@ func streamEventToSenderData(e *StreamEvent) sender.Data {
 	return d
 }
 
-func streamStartEventToSenderData(e *StreamEvent) sender.Data {
-	d := sender.Data{}
+func streamStartEventToSenderData(e *StreamEvent) models.Data {
+	d := models.Data{}
 	d["client_ip"] = e.ClientIp
 	d["tag"] = e.Tag
 	d["client_time"] = e.ClientTime.Format(time.RFC3339)
@@ -351,8 +352,8 @@ func streamStartEventToSenderData(e *StreamEvent) sender.Data {
 	return d
 }
 
-func streamEndEventToSenderData(e *StreamEvent) sender.Data {
-	d := sender.Data{}
+func streamEndEventToSenderData(e *StreamEvent) models.Data {
+	d := models.Data{}
 	d["client_ip"] = e.ClientIp
 	d["tag"] = e.Tag
 	d["client_time"] = e.ClientTime.Format(time.RFC3339)
@@ -448,8 +449,8 @@ func decodeMessage(message []byte) (*Message, error) {
 	return msg, nil
 }
 
-func (krp *KafkaQosStreamParser) Parse(lines []string) ([]sender.Data, error) {
-	datas := []sender.Data{}
+func (krp *KafkaQosStreamParser) Parse(lines []string) ([]models.Data, error) {
+	datas := []models.Data{}
 	for _, line := range lines {
 		msg, err := decodeMessage([]byte(line))
 		if msg == nil || err != nil {
@@ -463,7 +464,7 @@ func (krp *KafkaQosStreamParser) Parse(lines []string) ([]sender.Data, error) {
 			}
 			var e *StreamEvent
 			var err error
-			var dt sender.Data
+			var dt models.Data
 			if data[1] == "stream.v5" {
 				e, err = krp.parseStreamEvent(data)
 				if err != nil || e == nil {

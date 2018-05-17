@@ -1,71 +1,85 @@
 package mgr
 
 import (
-	"encoding/json"
-	"fmt"
-	"io/ioutil"
 	"net/http"
 	"os"
-	"testing"
 
-	"github.com/labstack/echo"
+	"github.com/json-iterator/go"
 	"github.com/qiniu/logkit/reader"
-	"github.com/qiniu/logkit/utils"
 	"github.com/stretchr/testify/assert"
 )
 
-// Rest 测试 端口容易冲突导致混淆，61xx
-func TestReaderAPI(t *testing.T) {
-	pwd, err := os.Getwd()
-	if err != nil {
-		t.Error(err)
-	}
-	confdir := pwd + DEFAULT_LOGKIT_REST_DIR
-	defer os.RemoveAll(confdir)
+type respReaderRet struct {
+	Code string `json:"code"`
+	Data string `json:"data"`
+}
 
-	var conf ManagerConfig
-	conf.BindHost = ":6101"
-	m, err := NewManager(conf)
-	if err != nil {
-		t.Fatal(err)
+// Rest 测试 端口容易冲突导致混淆，61xx
+func readerAPITest(p *testParam) {
+	t := p.t
+	rs := p.rs
+
+	var got1 respModeUsages
+	url := "http://127.0.0.1" + rs.address + "/logkit/reader/usages"
+	respCode, respBody, err := makeRequest(url, http.MethodGet, []byte{})
+	assert.NoError(t, err, string(respBody))
+	assert.Equal(t, http.StatusOK, respCode)
+	if err = jsoniter.Unmarshal(respBody, &got1); err != nil {
+		t.Fatalf("respBody %v unmarshal failed, error is %v", respBody, err)
 	}
-	rs := NewRestService(m, echo.New())
+	assert.Equal(t, reader.ModeUsages, got1.Data)
+
+	var got2 respModeKeyOptions
+	url = "http://127.0.0.1" + rs.address + "/logkit/reader/options"
+	respCode, respBody, err = makeRequest(url, http.MethodGet, []byte{})
+	assert.NoError(t, err, string(respBody))
+	assert.Equal(t, http.StatusOK, respCode)
+	if err = jsoniter.Unmarshal(respBody, &got2); err != nil {
+		t.Fatalf("respBody %v unmarshal failed, error is %v", respBody, err)
+	}
+	assert.Equal(t, reader.ModeKeyOptions, got2.Data)
+
+	var got3 respReaderRet
+	readerConfig := `{
+		"log_path":"./readerAPITest/logdir",
+		"meta_path":"./readerAPITest1/meta_req_csv",
+		"mode":"dir",
+		"read_from":"oldest",
+		"ignore_hidden":"true"
+	}`
+	logfile := "./readerAPITest/logdir/log1"
+	logdir := "./readerAPITest/logdir"
 	defer func() {
-		rs.Stop()
-		os.Remove(StatsShell)
+		os.RemoveAll("./readerAPITest")
+		os.RemoveAll("./readerAPITest1")
 	}()
 
-	var got1 []utils.KeyValue
+	if err := os.MkdirAll(logdir, 0777); err != nil {
+		t.Error(err)
+	}
+	err = createFile(logfile, 20000000)
+	if err != nil {
+		t.Error(err)
+	}
 
-	resp, err := http.Get("http://127.0.0.1" + rs.address + "/logkit/reader/usages")
-	if err != nil {
-		t.Error(err)
+	url = "http://127.0.0.1" + rs.address + "/logkit/reader/read"
+	respCode, respBody, err = makeRequest(url, http.MethodPost, []byte(readerConfig))
+	assert.NoError(t, err, string(respBody))
+	assert.Equal(t, http.StatusOK, respCode)
+	if err = jsoniter.Unmarshal(respBody, &got3); err != nil {
+		t.Fatalf("respBody %v unmarshal failed, error is %v", respBody, err)
 	}
-	content, _ := ioutil.ReadAll(resp.Body)
-	if resp.StatusCode != 200 {
-		t.Error(string(content))
-	}
-	err = json.Unmarshal(content, &got1)
-	if err != nil {
-		fmt.Println(string(content))
-		t.Error(err)
-	}
-	assert.Equal(t, reader.ModeUsages, got1)
+	expect := "abc\n"
+	assert.Equal(t, expect, got3.Data)
 
-	var got2 map[string][]utils.Option
-	resp, err = http.Get("http://127.0.0.1" + rs.address + "/logkit/reader/options")
-	if err != nil {
-		t.Error(err)
+	// Test reader/check with date transformer
+	var got4 respDataMessage
+	url = "http://127.0.0.1" + rs.address + "/logkit/reader/check"
+	respCode, respBody, err = makeRequest(url, http.MethodPost, []byte(readerConfig))
+	assert.NoError(t, err, string(respBody))
+	assert.Equal(t, http.StatusOK, respCode)
+	if err = jsoniter.Unmarshal(respBody, &got4); err != nil {
+		t.Fatalf("respBody %v unmarshal failed, error is %v", respBody, err)
 	}
-	content, _ = ioutil.ReadAll(resp.Body)
-	if resp.StatusCode != 200 {
-		t.Error(string(content))
-	}
-	err = json.Unmarshal(content, &got2)
-	if err != nil {
-		fmt.Println(string(content))
-		t.Error(err)
-	}
-	assert.Equal(t, reader.ModeKeyOptions, got2)
-
+	assert.Equal(t, "", got4.Message)
 }

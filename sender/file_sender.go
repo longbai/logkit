@@ -1,11 +1,13 @@
 package sender
 
 import (
-	"encoding/json"
 	"os"
 
 	"github.com/qiniu/logkit/conf"
+	. "github.com/qiniu/logkit/utils/models"
 	"github.com/qiniu/pandora-go-sdk/base/reqerr"
+
+	"github.com/json-iterator/go"
 )
 
 // FileSender write datas into local file
@@ -37,7 +39,7 @@ func NewFileSender(conf conf.MapConf) (sender Sender, err error) {
 }
 
 func newFileSender(name, path string, marshalFunc func([]Data) ([]byte, error)) (*FileSender, error) {
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0600)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, DefaultFilePerm)
 	if err != nil {
 		return nil, err
 	}
@@ -71,7 +73,7 @@ func (fs *FileSender) Close() error {
 
 // JSONLineMarshalFunc  将数据json并且按换行符分隔
 func JSONLineMarshalFunc(datas []Data) ([]byte, error) {
-	bytes, err := json.Marshal(datas)
+	bytes, err := jsoniter.Marshal(datas)
 	if err != nil {
 		return nil, err
 	}

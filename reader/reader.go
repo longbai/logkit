@@ -1,12 +1,14 @@
 package reader
 
 import (
-	"strings"
-
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/qiniu/log"
 	"github.com/qiniu/logkit/conf"
+	"github.com/qiniu/logkit/utils"
+	"github.com/qiniu/logkit/utils/models"
 )
 
 // Reader 是一个通用的行读取reader接口
@@ -19,6 +21,18 @@ type Reader interface {
 	SetMode(mode string, v interface{}) error
 	Close() error
 	SyncMeta()
+}
+
+// StatsReader 是一个通用的带有统计接口的reader
+type StatsReader interface {
+	//Name reader名称
+	Name() string
+	Status() utils.StatsInfo
+}
+
+//获取数据lag的接口
+type LagReader interface {
+	Lag() (*models.LagInfo, error)
 }
 
 // FileReader reader 接口方法
@@ -53,6 +67,7 @@ const (
 	KeyEncoding      = "encoding"
 	KeyReadIOLimit   = "readio_limit"
 	KeyDataSourceTag = "datasource_tag"
+	KeyTagFile       = "tag_file"
 	KeyHeadPattern   = "head_pattern"
 	KeyRunnerName    = "runner_name"
 
@@ -83,6 +98,14 @@ const (
 	KeyMssqlCron        = "mssql_cron"
 	KeyMssqlExecOnStart = "mssql_exec_onstart"
 
+	KeyPGsqlOffsetKey   = "postgres_offset_key"
+	KeyPGsqlReadBatch   = "postgres_limit_batch"
+	KeyPGsqlDataSource  = "postgres_datasource"
+	KeyPGsqlDataBase    = "postgres_database"
+	KeyPGsqlSQL         = "postgres_sql"
+	KeyPGsqlCron        = "postgres_cron"
+	KeyPGsqlExecOnStart = "postgres_exec_onstart"
+
 	KeyESReadBatch = "es_limit_batch"
 	KeyESIndex     = "es_index"
 	KeyESType      = "es_type"
@@ -100,9 +123,15 @@ const (
 	KeyMongoFilters     = "mongo_filters"
 	KeyMongoCert        = "mongo_cacert"
 
-	KeyKafkaGroupID   = "kafka_groupid"
-	KeyKafkaTopic     = "kafka_topic"
-	KeyKafkaZookeeper = "kafka_zookeeper"
+	KeyKafkaGroupID          = "kafka_groupid"
+	KeyKafkaTopic            = "kafka_topic"
+	KeyKafkaZookeeper        = "kafka_zookeeper"
+	KeyKafkaZookeeperChroot  = "kafka_zookeeper_chroot"
+	KeyKafkaZookeeperTimeout = "kafka_zookeeper_timeout"
+
+	KeyExecInterpreter   = "script_exec_interprepter"
+	KeyScriptCron        = "script_cron"
+	KeyScriptExecOnStart = "script_exec_onstart"
 )
 
 var defaultIgnoreFileSuffix = []string{
@@ -111,15 +140,21 @@ var defaultIgnoreFileSuffix = []string{
 
 // FileReader's modes
 const (
-	ModeDir     = "dir"
-	ModeFile    = "file"
-	ModeTailx   = "tailx"
-	ModeMysql   = "mysql"
-	ModeMssql   = "mssql"
-	ModeElastic = "elastic"
-	ModeMongo   = "mongo"
-	ModeKafka   = "kafka"
-	ModeRedis   = "redis"
+	ModeDir      = "dir"
+	ModeFile     = "file"
+	ModeTailx    = "tailx"
+	ModeFileAuto = "fileauto"
+	ModeMysql    = "mysql"
+	ModeMssql    = "mssql"
+	ModePG       = "postgres"
+	ModeElastic  = "elastic"
+	ModeMongo    = "mongo"
+	ModeKafka    = "kafka"
+	ModeRedis    = "redis"
+	ModeSocket   = "socket"
+	ModeHttp     = "http"
+	ModeScript   = "script"
+	ModeSnmp     = "snmp"
 )
 
 const (
@@ -133,17 +168,21 @@ const (
 	WhenceNewest = "newest"
 )
 
+const (
+	Loop = "loop"
+)
+
 // NewFileReader 创建FileReader
-func NewFileBufReader(conf conf.MapConf) (reader Reader, err error) {
+func NewFileBufReader(conf conf.MapConf, isFromWeb bool) (reader Reader, err error) {
 	meta, err := NewMetaWithConf(conf)
 	if err != nil {
 		log.Warn(err)
 		return
 	}
-	return NewFileBufReaderWithMeta(conf, meta)
+	return NewFileBufReaderWithMeta(conf, meta, isFromWeb)
 }
 
-func NewFileBufReaderWithMeta(conf conf.MapConf, meta *Meta) (reader Reader, err error) {
+func NewFileBufReaderWithMeta(conf conf.MapConf, meta *Meta, isFromWeb bool) (reader Reader, err error) {
 	mode, _ := conf.GetStringOr(KeyMode, ModeDir)
 	logpath, err := conf.GetString(KeyLogPath)
 	if err != nil && (mode == ModeFile || mode == ModeDir || mode == ModeTailx) {
@@ -169,9 +208,10 @@ func NewFileBufReaderWithMeta(conf conf.MapConf, meta *Meta) (reader Reader, err
 			return
 		}
 		reader, err = NewReaderSize(fr, meta, bufSize)
-
+	case ModeFileAuto:
+		reader, err = NewFileAutoReader(conf, meta, isFromWeb, bufSize, whence, logpath, fr)
 	case ModeFile:
-		fr, err = NewSingleFile(meta, logpath, whence)
+		fr, err = NewSingleFile(meta, logpath, whence, isFromWeb)
 		if err != nil {
 			return
 		}
@@ -184,6 +224,8 @@ func NewFileBufReaderWithMeta(conf conf.MapConf, meta *Meta) (reader Reader, err
 	case ModeMysql: // Mysql 模式是启动mysql reader,读取mysql数据表
 		reader, err = NewSQLReader(meta, conf)
 	case ModeMssql: // Mssql 模式是启动mssql reader，读取mssql数据表
+		reader, err = NewSQLReader(meta, conf)
+	case ModePG: // postgre 模式是启动PostgreSQL reader，读取postgresql数据表
 		reader, err = NewSQLReader(meta, conf)
 	case ModeElastic:
 		readBatch, _ := conf.GetIntOr(KeyESReadBatch, 100)
@@ -199,7 +241,7 @@ func NewFileBufReaderWithMeta(conf conf.MapConf, meta *Meta) (reader Reader, err
 		if !strings.HasPrefix(eshost, "http://") && !strings.HasPrefix(eshost, "https://") {
 			eshost = "http://" + eshost
 		}
-		esVersion, _ := conf.GetStringOr(KeyESVersion, ElasticVersion2)
+		esVersion, _ := conf.GetStringOr(KeyESVersion, ElasticVersion3)
 		keepAlive, _ := conf.GetStringOr(KeyESKeepAlive, "6h")
 		reader, err = NewESReader(meta, readBatch, estype, esindex, eshost, esVersion, keepAlive)
 	case ModeMongo:
@@ -228,10 +270,24 @@ func NewFileBufReaderWithMeta(conf conf.MapConf, meta *Meta) (reader Reader, err
 		if err != nil {
 			return nil, err
 		}
+		zkTimeout, _ := conf.GetIntOr(KeyKafkaZookeeperTimeout, 1)
+
 		zookeepers, err := conf.GetStringList(KeyKafkaZookeeper)
-		reader, err = NewKafkaReader(meta, consumerGroup, topics, zookeepers, whence)
+		if err != nil {
+			return nil, err
+		}
+		zkchroot, _ := conf.GetStringOr(KeyKafkaZookeeperChroot, "")
+		reader, err = NewKafkaReader(meta, consumerGroup, topics, zookeepers, zkchroot, time.Duration(zkTimeout)*time.Second, whence)
 	case ModeRedis:
 		reader, err = NewRedisReader(meta, conf)
+	case ModeSocket:
+		reader, err = NewSocketReader(meta, conf)
+	case ModeHttp:
+		reader, err = NewHttpReader(meta, conf)
+	case ModeScript:
+		reader, err = NewScriptReader(meta, conf)
+	case ModeSnmp:
+		reader, err = NewSnmpReader(meta, conf)
 	default:
 		err = fmt.Errorf("mode %v not supported now", mode)
 	}

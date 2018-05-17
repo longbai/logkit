@@ -5,9 +5,11 @@ import (
 	"os"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/qiniu/logkit/conf"
 
+	"github.com/qiniu/logkit/utils"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -21,16 +23,20 @@ func TestKafkaReader(t *testing.T) {
 	assert.NoError(t, err)
 	defer os.RemoveAll(metaDir)
 	er := &KafkaReader{
-		meta:           meta,
-		ConsumerGroup:  "group1",
-		Topics:         []string{"topic1"},
-		ZookeeperPeers: []string{"localhost:2181"},
-		Whence:         "oldest",
-		readChan:       make(chan json.RawMessage),
-		errs:           make(chan error, 1000),
-		status:         StatusInit,
-		mux:            sync.Mutex{},
-		started:        false,
+		meta:             meta,
+		ConsumerGroup:    "group1",
+		Topics:           []string{"topic1"},
+		ZookeeperPeers:   []string{"localhost:2181"},
+		ZookeeperTimeout: time.Second,
+		Whence:           "oldest",
+		readChan:         make(chan json.RawMessage),
+		errs:             make(chan error, 1000),
+		status:           StatusInit,
+		mux:              new(sync.Mutex),
+		started:          false,
+		statsLock:        new(sync.RWMutex),
 	}
 	assert.EqualValues(t, "KafkaReader:[topic1],[group1]", er.Name())
+
+	assert.Equal(t, utils.StatsInfo{}, er.Status())
 }

@@ -1,22 +1,32 @@
 package utils
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"compress/gzip"
 	"database/sql"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/fnv"
+	"io"
 	"io/ioutil"
+	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
+	"time"
+	"unicode"
 
 	"github.com/qiniu/log"
-)
+	. "github.com/qiniu/logkit/utils/models"
 
-const (
-	GlobalKeyName = "name"
+	"github.com/json-iterator/go"
 )
 
 type File struct {
@@ -125,6 +135,20 @@ func GetLogFiles(doneFilePath string) (files []File) {
 	return
 }
 
+type SchemaErr struct {
+	Number int64
+	Last   time.Time
+}
+
+func (s *SchemaErr) Output(count int64, err error) {
+	s.Number += count
+	if time.Now().Sub(s.Last) > 3*time.Second {
+		log.Errorf("%v parse line errors occured, same as %v", s.Number, err)
+		s.Number = 0
+		s.Last = time.Now()
+	}
+}
+
 type StatsError struct {
 	StatsInfo
 	ErrorDetail error `json:"error"`
@@ -133,10 +157,12 @@ type StatsError struct {
 }
 
 type StatsInfo struct {
-	Errors    int64 `json:"errors"`
-	Success   int64 `json:"success"`
-	LastError error `json:"last_error"`
-	Ftlag     int64 `json:"-"`
+	Errors    int64   `json:"errors"`
+	Success   int64   `json:"success"`
+	Speed     float64 `json:"speed"`
+	Trend     string  `json:"trend"`
+	LastError string  `json:"last_error"`
+	Ftlag     int64   `json:"-"`
 }
 
 func (se *StatsError) AddSuccess() {
@@ -239,4 +265,383 @@ type ErrorResponse struct {
 
 func NewErrorResponse(err error) *ErrorResponse {
 	return &ErrorResponse{Error: err}
+}
+
+type OSInfo struct {
+	Kernel   string
+	Core     string
+	Platform string
+	OS       string
+	Hostname string
+}
+
+func (oi *OSInfo) String() string {
+	return fmt.Sprintf("%s; %s; %s; %s %s", oi.Hostname, oi.OS, oi.Core, oi.Kernel, oi.Platform)
+}
+
+func GetExtraInfo() map[string]string {
+	osInfo := GetOSInfo()
+	exInfo := make(map[string]string)
+	exInfo[KeyCore] = osInfo.Core
+	exInfo[KeyHostName] = osInfo.Hostname
+	exInfo[KeyOsInfo] = osInfo.OS + "-" + osInfo.Kernel + "-" + osInfo.Platform
+	if ip, err := GetLocalIP(); err == nil {
+		exInfo[KeyLocalIp] = ip
+	}
+	return exInfo
+}
+
+func IsJsonString(s string) bool {
+	var x interface{}
+	if err := jsoniter.Unmarshal([]byte(s), &x); err != nil {
+		return false
+	}
+	switch x.(type) {
+	case []interface{}, map[string]interface{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func ExtractField(slice []string) ([]string, error) {
+	var err error
+	switch len(slice) {
+	case 1:
+		return slice, err
+	case 2:
+		rgexpr := "^%\\{\\[\\S+\\]}$" // --->  %{[type]}
+		r, _ := regexp.Compile(rgexpr)
+		slice[0] = strings.TrimSpace(slice[0])
+		bol := r.MatchString(slice[0])
+		if bol {
+			rs := []rune(slice[0])
+			slice[0] = string(rs[3 : len(rs)-2])
+			return slice, err
+		}
+	default:
+	}
+	err = fmt.Errorf("parameters error,  you can write two parameters like: %{[type]}, default or only one: default")
+	return nil, err
+}
+
+//根据key字符串,拆分出层级keys数据
+func GetKeys(keyStr string) []string {
+	keys := strings.FieldsFunc(keyStr, isSeparator)
+	return keys
+}
+
+func isSeparator(separator rune) bool {
+	return separator == '.' || unicode.IsSpace(separator)
+}
+
+//通过层级key获取value.
+//所有层级的map必须为 map[string]interface{} 类型.
+//keys为空切片,返回原m
+func GetMapValue(m map[string]interface{}, keys ...string) (interface{}, error) {
+	var err error
+	var val interface{}
+	val = m
+	for i, k := range keys {
+		//判断val是否为map[string]interface{}类型
+		if _, ok := val.(map[string]interface{}); ok {
+			//判断val(k)是否存在
+			if _, ok := val.(map[string]interface{})[k]; ok {
+				val = val.(map[string]interface{})[k]
+			} else {
+				keys = keys[0 : i+1]
+				err = fmt.Errorf("GetMapValue failed, keys %v are non-existent", keys)
+				return nil, err
+			}
+		} else {
+			err = fmt.Errorf("GetMapValue failed, %v is not the type of map[string]interface{}", val)
+			return nil, err
+		}
+	}
+	return val, err
+}
+
+//通过层级key设置value值.
+//如果key不存在,将会自动创建.
+//当coercive为true时,会强制将非map[string]interface{}类型替换为map[string]interface{}类型,有可能导致数据丢失
+func SetMapValue(m map[string]interface{}, val interface{}, coercive bool, keys ...string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	curr := m
+	for _, k := range keys[0 : len(keys)-1] {
+		if _, ok := curr[k]; !ok {
+			n := make(map[string]interface{})
+			curr[k] = n
+			curr = n
+			continue
+		}
+		if _, ok := curr[k].(map[string]interface{}); !ok {
+			if coercive {
+				n := make(map[string]interface{})
+				curr[k] = n
+			} else {
+				err := fmt.Errorf("SetMapValue failed, %v is not the type of map[string]interface{}", curr[k])
+				return err
+			}
+		}
+		curr = curr[k].(map[string]interface{})
+	}
+	curr[keys[len(keys)-1]] = val
+	return nil
+}
+
+//通过层级key删除key-val,并返回被删除的val,是否删除成功
+//如果key不存在,则返回 nil,false
+func DeleteMapValue(m map[string]interface{}, keys ...string) (interface{}, bool) {
+	var val interface{}
+	val = m
+	for i, k := range keys {
+		if _, ok := val.(map[string]interface{}); ok {
+			if _, ok := val.(map[string]interface{})[k]; ok {
+				if i == len(keys)-1 {
+					delVal := val.(map[string]interface{})[k]
+					delete(val.(map[string]interface{}), keys[len(keys)-1])
+					return delVal, true
+				}
+				val = val.(map[string]interface{})[k]
+			} else {
+				return nil, false
+			}
+		} else {
+			return nil, false
+		}
+	}
+	return nil, false
+}
+
+func AddHttpProtocal(url string) string {
+	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+		return "http://" + url
+	}
+	return url
+}
+
+func RemoveHttpProtocal(url string) (hostport, schema string) {
+	chttps := "https://"
+	chttp := "http://"
+	if strings.HasPrefix(url, chttp) {
+		return strings.TrimPrefix(url, chttp), chttp
+	}
+	if strings.HasPrefix(url, chttps) {
+		return strings.TrimPrefix(url, chttps), chttps
+	}
+	return url, chttp
+}
+
+func GetLocalIP() (string, error) {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return "127.0.0.1", fmt.Errorf("Get local IP error: %v\n", err)
+	}
+	for _, address := range addrs {
+		// check the address type and if it is not a loopback the display it
+		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			if ipnet.IP.To4() != nil {
+				return ipnet.IP.String(), nil
+			}
+		}
+	}
+	return "127.0.0.1", errors.New("no local IP found")
+}
+
+type HashSet struct {
+	data map[interface{}]bool
+	mu   *sync.RWMutex
+}
+
+func NewHashSet() *HashSet {
+	return &HashSet{
+		data: make(map[interface{}]bool),
+		mu:   new(sync.RWMutex),
+	}
+}
+
+func (s *HashSet) Add(ele interface{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.data[ele] = true
+}
+
+func (s *HashSet) AddStringArray(ele []string) {
+	for _, e := range ele {
+		s.Add(e)
+	}
+}
+
+func (s *HashSet) Remove(ele interface{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.data, ele)
+}
+
+func (s *HashSet) Clear() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.data = make(map[interface{}]bool)
+}
+
+func (s *HashSet) IsIn(ele interface{}) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.data[ele]
+}
+
+func (s *HashSet) IsEmpty() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.Len() == 0 {
+		return true
+	}
+	return false
+}
+
+func (s *HashSet) Len() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.data)
+}
+
+func (s *HashSet) Elements() []interface{} {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	element := make([]interface{}, 0)
+	for key, _ := range s.data {
+		element = append(element, key)
+	}
+	return element
+}
+
+// 创建目录，并返回日志模式
+func LogDirAndPattern(logpath string) (dir, pattern string, err error) {
+	dir, err = filepath.Abs(filepath.Dir(logpath))
+	if err != nil {
+		if !os.IsNotExist(err) {
+			err = fmt.Errorf("get logkit log dir error %v", err)
+			return
+		}
+	}
+	if _, err = os.Stat(dir); os.IsNotExist(err) {
+		if err = os.MkdirAll(dir, DefaultDirPerm); err != nil {
+			err = fmt.Errorf("create logkit log dir error %v", err)
+			return
+		}
+	}
+	pattern = filepath.Base(logpath)
+	return
+}
+
+func DecompressZip(packFilePath, dstDir string) (packDir string, err error) {
+	r, err := zip.OpenReader(packFilePath) //读取zip文件
+	if err != nil {
+		return "", err
+	}
+	defer r.Close()
+	for _, f := range r.File {
+		rc, err := f.Open()
+		if err != nil {
+			return "", err
+		}
+		defer rc.Close()
+
+		fpath := filepath.Join(dstDir, f.Name)
+		if f.FileInfo().IsDir() {
+			if packDir == "" {
+				packDir = fpath
+			}
+			os.MkdirAll(fpath, f.Mode())
+		} else {
+			var fdir string
+			if lastIndex := strings.LastIndex(fpath, string(os.PathSeparator)); lastIndex > -1 {
+				fdir = fpath[:lastIndex]
+			}
+			err = os.MkdirAll(fdir, f.Mode())
+			if err != nil {
+				fmt.Println(err)
+				return "", err
+			}
+			f, err := os.OpenFile(
+				fpath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
+			if err != nil {
+				return "", err
+			}
+			defer f.Close()
+
+			_, err = io.Copy(f, rc)
+			if err != nil {
+				return "", err
+			}
+		}
+	}
+	return
+}
+
+func DecompressGzip(packPath, dstDir string) (packDir string, err error) {
+	srcFile, err := os.Open(packPath)
+	if err != nil {
+		return "", err
+	}
+	defer srcFile.Close()
+	gr, err := gzip.NewReader(srcFile)
+	if err != nil {
+		return "", err
+	}
+	defer gr.Close()
+	tr := tar.NewReader(gr)
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		} else if err != nil {
+			return "", err
+		}
+		path := filepath.Join(dstDir, header.Name)
+		info := header.FileInfo()
+		if info.IsDir() {
+			if err = os.MkdirAll(path, info.Mode()); err != nil {
+				return "", err
+			}
+			if packDir == "" {
+				packDir = path
+			}
+			continue
+		}
+		file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, info.Mode())
+		if err != nil {
+			return "", err
+		}
+		defer file.Close()
+		_, err = io.Copy(file, tr)
+		if err != nil {
+			return "", err
+		}
+	}
+	return
+}
+
+func CheckFileMode(path string, fileMode os.FileMode) error {
+	perm := fileMode.Perm()
+
+	// 73: 000 001 001 001
+	checkPerm := perm & os.FileMode(73)
+	if uint32(checkPerm) != uint32(73) {
+		changePerm := perm | os.FileMode(73)
+		err := os.Chmod(path, changePerm)
+		if err != nil {
+			err = fmt.Errorf("change mode for %v error %v", path, err)
+			return err
+		}
+	}
+	return nil
+}
+
+func Hash(s string) string {
+	h := fnv.New32a()
+	h.Write([]byte(s))
+	return strconv.Itoa(int(h.Sum32()))
 }

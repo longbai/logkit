@@ -5,13 +5,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/qiniu/logkit/utils"
+	. "github.com/qiniu/logkit/utils/models"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/qiniu/logkit/sender"
 )
 
-var grokBench sender.Data
+var grokBench Data
 
 func Benchmark_GrokParseLine_NGINX(b *testing.B) {
 	p := &GrokParser{
@@ -19,7 +19,7 @@ func Benchmark_GrokParseLine_NGINX(b *testing.B) {
 	}
 	p.compile()
 
-	var m sender.Data
+	var m Data
 	for n := 0; n < b.N; n++ {
 		m, _ = p.parseLine(`127.0.0.1 user-identifier frank [10/Oct/2000:13:55:36 -0700] "GET /apache_pb.gif HTTP/1.0" 200 2326`)
 	}
@@ -32,7 +32,7 @@ func Benchmark_GrokParseLine_PANDORANGINX(b *testing.B) {
 	}
 	p.compile()
 
-	var m sender.Data
+	var m Data
 	for n := 0; n < b.N; n++ {
 		m, _ = p.parseLine(`123.0.0.1 - - [17/Jul/2017:14:56:24 +0800] "POST /v2/repos/x/data HTTP/1.1" 200 479 2 "-" "QiniuPandoraJava/0.0.1 (Linux amd64 2.6.32-696.1.1.el6.x86_64) Java/1.8.0_131" "-" 192.168.160.75:80 pipeline.qiniu.com abc123bdc 0.072`)
 	}
@@ -45,12 +45,21 @@ func Benchmark_GrokParseLine_Common(b *testing.B) {
 	}
 	p.compile()
 
-	var m sender.Data
+	var m Data
 	for n := 0; n < b.N; n++ {
 		m, _ = p.parseLine(`127.0.0.1 user-identifier frank [10/Oct/2000:13:55:36 -0700] "GET /apache_pb.gif HTTP/1.0" 200 2326`)
 	}
 	grokBench = m
 }
+
+func Benchmark_GroktrimInvalidSpace(b *testing.B) {
+	src := "TEST_LOG_A %{NUMBER :myfloat:  float} %{  RESPONSE_CODE} %{IPORHOST : clientip} %{  RESPONSE_TIME}"
+	for i := 0; i < b.N; i++ {
+		trimInvalidSpace(src)
+	}
+}
+
+//100000	     17110 ns/op
 
 func TestParseTimeZoneOffset(t *testing.T) {
 	tests := []struct {
@@ -107,7 +116,7 @@ func TestSimpleParse(t *testing.T) {
 	require.NotNil(t, m)
 
 	assert.Equal(t,
-		sender.Data{
+		Data{
 			"num":    int64(142),
 			"client": "bot",
 		},
@@ -178,7 +187,7 @@ func TestParserName(t *testing.T) {
 	require.NotNil(t, m)
 	assert.NoError(t, err)
 	assert.Equal(t,
-		sender.Data{
+		Data{
 			"resp_bytes":   int64(2326),
 			"auth":         "frank",
 			"client_ip":    "127.0.0.1",
@@ -204,7 +213,7 @@ func TestCLF_IPv6(t *testing.T) {
 	require.NotNil(t, m)
 	assert.NoError(t, err)
 	assert.Equal(t,
-		sender.Data{
+		Data{
 			"client_ip":    "2001:0db8:85a3:0000:0000:8a2e:0370:7334",
 			"ts":           "2000-10-10T13:55:36-07:00",
 			"verb":         "GET",
@@ -222,7 +231,7 @@ func TestCLF_IPv6(t *testing.T) {
 	require.NotNil(t, m)
 	assert.NoError(t, err)
 	assert.Equal(t,
-		sender.Data{
+		Data{
 			"resp_bytes":   int64(2326),
 			"auth":         "frank",
 			"client_ip":    "::1",
@@ -245,11 +254,11 @@ func TestCustomInfluxdbHttpd(t *testing.T) {
 	assert.NoError(t, p.compile())
 
 	// Parse an influxdb POST request
-	m, err := p.parseLine(`[httpd] ::1 - - [14/Jun/2016:11:33:29 +0100] "POST /write?consistency=any&db=telegraf&precision=ns&rp= HTTP/1.1" 204 0 "-" "InfluxDBClient" 6f61bc44-321b-11e6-8050-000000000000 2513`)
+	m, err := p.parseLine(`[httpd] ::1 - - [14/Jun/2016:11:33:29 +0100] "POST /write?consistency=any&db=logkit&precision=ns&rp= HTTP/1.1" 204 0 "-" "InfluxDBClient" 6f61bc44-321b-11e6-8050-000000000000 2513`)
 	require.NotNil(t, m)
 	assert.NoError(t, err)
 	assert.Equal(t,
-		sender.Data{
+		Data{
 			"resp_bytes":       int64(0),
 			"auth":             "-",
 			"client_ip":        "::1",
@@ -257,7 +266,7 @@ func TestCustomInfluxdbHttpd(t *testing.T) {
 			"ident":            "-",
 			"referrer":         "-",
 			"verb":             "POST",
-			"request":          "/write?consistency=any&db=telegraf&precision=ns&rp=",
+			"request":          "/write?consistency=any&db=logkit&precision=ns&rp=",
 			"response_time_us": int64(2513),
 			"agent":            "InfluxDBClient",
 			"resp_code":        "204",
@@ -267,18 +276,18 @@ func TestCustomInfluxdbHttpd(t *testing.T) {
 		m)
 
 	// Parse an influxdb GET request
-	m, err = p.parseLine(`[httpd] ::1 - - [14/Jun/2016:12:10:02 +0100] "GET /query?db=telegraf&q=SELECT+bytes%2Cresponse_time_us+FROM+logGrokParser_grok+WHERE+http_method+%3D+%27GET%27+AND+response_time_us+%3E+0+AND+time+%3E+now%28%29+-+1h HTTP/1.1" 200 578 "http://localhost:8083/" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.84 Safari/537.36" 8a3806f1-3220-11e6-8006-000000000000 988`)
+	m, err = p.parseLine(`[httpd] ::1 - - [14/Jun/2016:12:10:02 +0100] "GET /query?db=logkit&q=SELECT+bytes%2Cresponse_time_us+FROM+logGrokParser_grok+WHERE+http_method+%3D+%27GET%27+AND+response_time_us+%3E+0+AND+time+%3E+now%28%29+-+1h HTTP/1.1" 200 578 "http://localhost:8083/" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.84 Safari/537.36" 8a3806f1-3220-11e6-8006-000000000000 988`)
 	require.NotNil(t, m)
 	assert.NoError(t, err)
 	assert.Equal(t,
-		sender.Data{
+		Data{
 			"resp_bytes":       int64(578),
 			"auth":             "-",
 			"client_ip":        "::1",
 			"http_version":     float64(1.1),
 			"ident":            "-",
 			"referrer":         "http://localhost:8083/",
-			"request":          "/query?db=telegraf&q=SELECT+bytes%2Cresponse_time_us+FROM+logGrokParser_grok+WHERE+http_method+%3D+%27GET%27+AND+response_time_us+%3E+0+AND+time+%3E+now%28%29+-+1h",
+			"request":          "/query?db=logkit&q=SELECT+bytes%2Cresponse_time_us+FROM+logGrokParser_grok+WHERE+http_method+%3D+%27GET%27+AND+response_time_us+%3E+0+AND+time+%3E+now%28%29+-+1h",
 			"response_time_us": int64(988),
 			"agent":            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.84 Safari/537.36",
 			"resp_code":        "200",
@@ -302,7 +311,7 @@ func TestBuiltinCommonLogFormat(t *testing.T) {
 	require.NotNil(t, m)
 	assert.NoError(t, err)
 	assert.Equal(t,
-		sender.Data{
+		Data{
 			"resp_bytes":   int64(2326),
 			"auth":         "frank",
 			"client_ip":    "127.0.0.1",
@@ -329,7 +338,7 @@ func TestBuiltinCommonLogFormatWithNumbers(t *testing.T) {
 	require.NotNil(t, m)
 	assert.NoError(t, err)
 	assert.Equal(t,
-		sender.Data{
+		Data{
 			"resp_bytes":   int64(2326),
 			"auth":         "frank1234",
 			"client_ip":    "127.0.0.1",
@@ -356,7 +365,7 @@ func TestBuiltinCombinedLogFormat(t *testing.T) {
 	require.NotNil(t, m)
 	assert.NoError(t, err)
 	assert.Equal(t,
-		sender.Data{
+		Data{
 			"resp_bytes":   int64(2326),
 			"auth":         "frank",
 			"client_ip":    "127.0.0.1",
@@ -388,7 +397,32 @@ func TestCompileStringAndParse(t *testing.T) {
 	require.NotNil(t, metricA)
 	assert.NoError(t, err)
 	assert.Equal(t,
-		sender.Data{
+		Data{
+			"clientip":      "192.168.1.1",
+			"myfloat":       float64(1.25),
+			"response_time": "5.432µs",
+			"response_code": "200",
+		},
+		metricA)
+}
+
+func TestCompileInvalidStringAndParse(t *testing.T) {
+	p := &GrokParser{
+		Patterns: []string{"%{TEST_LOG_A}"},
+		CustomPatterns: `
+			DURATION %{NUMBER}[nuµm]?s
+			RESPONSE_CODE %{ NUMBER :   response_code }
+			RESPONSE_TIME %{ DURATION :  response_time  }
+			TEST_LOG_A %{ NUMBER :myfloat:  float} %{ RESPONSE_CODE  } %{ IPORHOST : clientip} %{  RESPONSE_TIME }
+		`,
+	}
+	assert.NoError(t, p.compile())
+
+	metricA, err := p.parseLine(`1.25 200 192.168.1.1 5.432µs`)
+	require.NotNil(t, metricA)
+	assert.NoError(t, err)
+	assert.Equal(t,
+		Data{
 			"clientip":      "192.168.1.1",
 			"myfloat":       float64(1.25),
 			"response_time": "5.432µs",
@@ -423,7 +457,7 @@ func TestParsePatternsWithoutCustom(t *testing.T) {
 	require.NotNil(t, metricA)
 	assert.NoError(t, err)
 	assert.Equal(t,
-		sender.Data{
+		Data{
 			"response_time": int64(20821),
 			"metric":        float64(10890.645),
 			"ts":            int64(1466004605359052000),
@@ -442,7 +476,7 @@ func TestCompileFileAndParse(t *testing.T) {
 	require.NotNil(t, metricA)
 	assert.NoError(t, err)
 	assert.Equal(t,
-		sender.Data{
+		Data{
 			"clientip":      "192.168.1.1",
 			"myfloat":       float64(1.25),
 			"response_time": "5.432µs",
@@ -456,7 +490,7 @@ func TestCompileFileAndParse(t *testing.T) {
 	require.NotNil(t, metricB)
 	assert.NoError(t, err)
 	assert.Equal(t,
-		sender.Data{
+		Data{
 			"myfloat":    1.25,
 			"mystring":   "mystring",
 			"nomodifier": "nomodifier",
@@ -479,7 +513,7 @@ func TestCompileNoModifiersAndParse(t *testing.T) {
 	require.NotNil(t, metricA)
 	assert.NoError(t, err)
 	assert.Equal(t,
-		sender.Data{
+		Data{
 			"clientip": "192.168.1.1",
 			"myfloat":  "1.25",
 			"rt":       "5.432µs",
@@ -499,7 +533,7 @@ func TestCompileNoNamesAndParse(t *testing.T) {
 
 	metricA, err := p.parseLine(`1.25 200 192.168.1.1 5.432µs`)
 	require.Nil(t, metricA)
-	assert.NoError(t, err)
+	assert.Error(t, err)
 }
 
 func TestParseNoMatch(t *testing.T) {
@@ -510,7 +544,7 @@ func TestParseNoMatch(t *testing.T) {
 	assert.NoError(t, p.compile())
 
 	metricA, err := p.parseLine(`[04/Jun/2016:12:41:45 +0100] notnumber 200 192.168.1.1 5.432µs 101`)
-	assert.NoError(t, err)
+	assert.Error(t, err)
 	assert.Nil(t, metricA)
 }
 
@@ -596,7 +630,7 @@ func TestParseMultiLine(t *testing.T) {
 
 			FPMERRORLOG \[%{PHPLOGTIMESTAMP:timestamp}\] %{WORD:type}: %{GREEDYDATA:message}
 			PHPERRORLOG %{PHPTIMESTAMP} %{WORD:type} %{GREEDYDATA:message}
-			
+
 			PHP_FPM_SLOW_LOG (?m)^\[%{PHPLOGTIMESTAMP:timestamp}\]\s\s\[%{WORD:type}\s%{WORD}\]\s%{GREEDYDATA:message}$
 		`,
 	}
@@ -615,11 +649,147 @@ func TestParseMultiLine(t *testing.T) {
 
 	data, err := p.parseLine(strings.Join(lines, "\n"))
 	assert.NoError(t, err)
-	t.Log(data)
 	assert.Equal(t,
-		sender.Data{
+		Data{
 			"timestamp": "05-May-2017 13:44:39",
 			"type":      "pool",
 			"message":   "pid 4109 script_filename = /data/html/log.ushengsheng.com/index.php [0x00007fec119d1720] curl_exec() /data/html/xyframework/base/XySoaClient.php:357 [0x00007fec119d1590] request_post() /data/html/xyframework/base/XySoaClient.php:284 [0x00007fff39d538b0] __call() unknown:0 [0x00007fec119d13a8] add() /data/html/log.ushengsheng.com/1/interface/ErrorLogInterface.php:70 [0x00007fec119d1298] log() /data/html/log.ushengsheng.com/1/interface/ErrorLogInterface.php:30 [0x00007fec119d1160] android() /data/html/xyframework/core/x.php:215 [0x00007fec119d0ff8] +++ dump failed",
 		}, data)
+}
+
+func TestTrimInvalidSpace(t *testing.T) {
+	tests := []struct {
+		s   string
+		exp string
+	}{
+		{
+			"%{aaa}",
+			"%{aaa}",
+		},
+		{
+			"%{  aa}",
+			"%{aa}",
+		},
+		{
+			"%{aaa }",
+			"%{aaa}",
+		},
+		{
+			"%{ aa a }",
+			"%{aa a}",
+		},
+		{
+			"%{ a a:	bb }",
+			"%{a a:bb}",
+		},
+		{
+			"%{ aa a : b	bb b :ss }",
+			"%{aa a:b	bb b:ss}",
+		},
+		{
+			"%{ a aa: b b :c} :$ s absc%{ aa: b bb }",
+			"%{a aa:b b:c} :$ s absc%{aa:b bb}",
+		},
+		{
+			"%{ a a : b b : c c } : %{ d d : e e } : %{ f f }",
+			"%{a a:b b:c c} : %{d d:e e} : %{f f}",
+		},
+		{
+			"%{a:a} aa : bb %{b:c} bb : cc %{e} ee: ff",
+			"%{a:a} aa : bb %{b:c} bb : cc %{e} ee: ff",
+		},
+		{
+			"%{aaa:bbb:ccc}%{aaa:bbb}%{aaa}",
+			"%{aaa:bbb:ccc}%{aaa:bbb}%{aaa}",
+		},
+		{
+			"DURATION %{NUMBER  }[nuµm]?s",
+			"DURATION %{NUMBER}[nuµm]?s",
+		},
+		{
+			"DURATION %{NUMBER  }[nuµm]?s",
+			"DURATION %{NUMBER}[nuµm]?s",
+		},
+		{
+			"RESPONSE_CODE %{ NUMBER :   response_code }",
+			"RESPONSE_CODE %{NUMBER:response_code}",
+		},
+		{
+			"RESPONSE_TIME %{ DURATION :  response_time  }",
+			"RESPONSE_TIME %{DURATION:response_time}",
+		},
+		{
+			"TEST_LOG_A %{NUMBER :myfloat:  float} %{  RESPONSE_CODE} %{IPORHOST : clientip} %{  RESPONSE_TIME}",
+			"TEST_LOG_A %{NUMBER:myfloat:float} %{RESPONSE_CODE} %{IPORHOST:clientip} %{RESPONSE_TIME}",
+		},
+		{
+			"%{{}",
+			"%{{}",
+		},
+		{
+			"%{ { }",
+			"%{{}",
+		},
+		{
+			"%{ { } } ",
+			"%{{} } ",
+		},
+		{
+			"%{}",
+			"%{}",
+		},
+		{
+			"%{ }",
+			"%{}",
+		},
+		{
+			"%{",
+			"%{",
+		},
+		{
+			"%}",
+			"%}",
+		},
+		{
+			"{ }",
+			"{ }",
+		},
+	}
+	for _, ti := range tests {
+		got := trimInvalidSpace(ti.s)
+		assert.Equal(t, ti.exp, got)
+	}
+}
+
+func TestAddCustomPatterns(t *testing.T) {
+	p := &GrokParser{
+		Patterns: []string{"%{TEST_LOG_A}"},
+		CustomPatterns: `
+			DURATION
+			RESPONSE_CODE %{NUMBER:response_code}
+			RESPONSE_TIME %{DURATION:response_time}
+			TEST_LOG_A %{NUMBER:myfloat:float} %{RESPONSE_CODE} %{IPORHOST:clientip} %{RESPONSE_TIME}
+		`,
+	}
+	assert.Error(t, p.compile())
+}
+
+func TestNginxTimeParseForErrData(t *testing.T) {
+	p := &GrokParser{
+		Patterns: []string{"%{test}"},
+	}
+
+	lines := []string{`192.168.45.53 - - [05/Apr/2017:17:25:06 +0800] "POST /v2/repos/kodo_z0_app_pfdstg/data HTTP/1.1" 200 497 2 "-" "Go 1.1 package http" "-" 192.168.160.1:80 pipeline.qiniu.io KBkAAD7W6-UfdrIU 0.139`}
+	m, err := p.Parse(lines)
+	if err != nil {
+		errx, _ := err.(*utils.StatsError)
+		assert.Equal(t, int64(1), errx.StatsInfo.Errors)
+	}
+	if len(m) != 1 {
+		t.Fatalf("parse lines error, expect 1 line but got %v lines", len(m))
+	}
+
+	for _, v := range m {
+		assert.EqualValues(t, lines[0], v[KeyPandoraStash])
+	}
 }

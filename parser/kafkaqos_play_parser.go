@@ -10,10 +10,12 @@ import (
 	// "github.com/linkedin/goavro"
 	// "github.com/qiniu/log"
 	"github.com/qiniu/logkit/conf"
-	"github.com/qiniu/logkit/sender"
+	// "github.com/qiniu/logkit/sender"
 	// "github.com/qiniu/logkit/times"
 
 	"github.com/wangtuanjie/ip17mon"
+
+	"github.com/qiniu/logkit/utils/models"
 )
 
 // const (
@@ -255,8 +257,8 @@ func (krp *KafkaQosPlayParser) parsePlayEndEvent(data []string) (e *PlayEvent, e
 	return &event, nil
 }
 
-func playEventToSenderData(e *PlayEvent) sender.Data {
-	d := sender.Data{}
+func playEventToSenderData(e *PlayEvent) models.Data {
+	d := models.Data{}
 	d["client_ip"] = e.ClientIp
 	d["tag"] = e.Tag
 	d["client_time"] = e.ClientTime.Format(time.RFC3339)
@@ -288,8 +290,8 @@ func playEventToSenderData(e *PlayEvent) sender.Data {
 	return d
 }
 
-func playStartEventToSenderData(e *PlayEvent) sender.Data {
-	d := sender.Data{}
+func playStartEventToSenderData(e *PlayEvent) models.Data {
+	d := models.Data{}
 	d["client_ip"] = e.ClientIp
 	d["tag"] = e.Tag
 	d["client_time"] = e.ClientTime.Format(time.RFC3339)
@@ -315,8 +317,8 @@ func playStartEventToSenderData(e *PlayEvent) sender.Data {
 	return d
 }
 
-func playEndEventToSenderData(e *PlayEvent) sender.Data {
-	d := sender.Data{}
+func playEndEventToSenderData(e *PlayEvent) models.Data {
+	d := models.Data{}
 	d["client_ip"] = e.ClientIp
 	d["tag"] = e.Tag
 	d["client_time"] = e.ClientTime.Format(time.RFC3339)
@@ -361,8 +363,8 @@ func playEndEventToSenderData(e *PlayEvent) sender.Data {
 	return d
 }
 
-func (krp *KafkaQosPlayParser) Parse(lines []string) ([]sender.Data, error) {
-	datas := []sender.Data{}
+func (krp *KafkaQosPlayParser) Parse(lines []string) ([]models.Data, error) {
+	datas := []models.Data{}
 	for _, line := range lines {
 		msg, err := decodeMessage([]byte(line))
 		if msg == nil || err != nil {
@@ -376,7 +378,7 @@ func (krp *KafkaQosPlayParser) Parse(lines []string) ([]sender.Data, error) {
 			}
 			var e *PlayEvent
 			var err error
-			var dt sender.Data
+			var dt models.Data
 			if data[1] == "play.v5" {
 				e, err = krp.parsePlayEvent(data)
 				if err != nil || e == nil {

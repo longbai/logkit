@@ -5,11 +5,9 @@ import (
 	"fmt"
 
 	"github.com/qiniu/logkit/conf"
+	"github.com/qiniu/logkit/utils"
+	. "github.com/qiniu/logkit/utils/models"
 )
-
-// Data store as use key/value map
-// e.g sum -> 1.2, url -> qiniu.com
-type Data map[string]interface{}
 
 // NotAsyncSender return when sender is not async
 var ErrNotAsyncSender = errors.New("This Sender does not support for Async Push")
@@ -22,12 +20,29 @@ type Sender interface {
 	Close() error
 }
 
+type StatsSender interface {
+	Name() string
+	// send data, error if failed
+	Send([]Data) error
+	Close() error
+	Stats() utils.StatsInfo
+	// 恢复 sender 停止之前的状态
+	Restore(*utils.StatsInfo)
+}
+
+type TokenRefreshable interface {
+	TokenRefresh(conf.MapConf) error
+}
+
 // Sender's conf keys
 const (
-	KeySenderType    = "sender_type"
-	KeyFaultTolerant = "fault_tolerant"
-	KeyName          = "name"
-	KeyRunnerName    = "runner_name"
+	KeySenderType     = "sender_type"
+	KeyFaultTolerant  = "fault_tolerant"
+	KeyName           = "name"
+	KeyRunnerName     = "runner_name"
+	KeyLogkitSendTime = "logkit_send_time"
+	KeyIsMetrics      = "is_metrics"
+	KeyMetricTime     = "timestamp"
 )
 
 const UnderfinedRunnerName = "UnderfinedRunnerName"
@@ -42,6 +57,12 @@ const (
 	TypeDiscard           = "discard"       // discard sender
 	TypeElastic           = "elasticsearch" // elastic
 	TypeMultiPandora      = "multi_pandora" // elastic
+	TypeKafka             = "kafka"         // kafka
+	TypeHttp              = "http"          // http sender
+)
+
+const (
+	InnerUserAgent = "_useragent"
 )
 
 // Ft sender默认同步一次meta信息的数据次数
@@ -64,6 +85,8 @@ func NewSenderRegistry() *SenderRegistry {
 	ret.RegisterSender(TypeMock, NewMockSender)
 	ret.RegisterSender(TypeDiscard, NewDiscardSender)
 	// ret.RegisterSender(TypeMultiPandora, NewMultiPandoraSender)
+	ret.RegisterSender(TypeKafka, NewKafkaSender)
+	ret.RegisterSender(TypeHttp, NewHttpSender)
 	return ret
 }
 
@@ -76,7 +99,7 @@ func (registry *SenderRegistry) RegisterSender(senderType string, constructor fu
 	return nil
 }
 
-func (r *SenderRegistry) NewSender(conf conf.MapConf) (sender Sender, err error) {
+func (r *SenderRegistry) NewSender(conf conf.MapConf, ftSaveLogPath string) (sender Sender, err error) {
 	sendType, err := conf.GetString(KeySenderType)
 	if err != nil {
 		return
@@ -89,9 +112,9 @@ func (r *SenderRegistry) NewSender(conf conf.MapConf) (sender Sender, err error)
 	if err != nil {
 		return
 	}
-	faultTolerant, _ := conf.GetBoolOr(KeyFaultTolerant, false)
+	faultTolerant, _ := conf.GetBoolOr(KeyFaultTolerant, true)
 	if faultTolerant {
-		sender, err = NewFtSender(sender, conf)
+		sender, err = NewFtSender(sender, conf, ftSaveLogPath)
 		if err != nil {
 			return
 		}

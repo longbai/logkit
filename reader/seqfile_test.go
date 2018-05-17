@@ -2,13 +2,13 @@ package reader
 
 import (
 	"bufio"
+	"fmt"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"io/ioutil"
-
-	"fmt"
+	. "github.com/qiniu/logkit/utils/models"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -23,7 +23,7 @@ func Test_Read(t *testing.T) {
 	createFile(1000)
 	defer destroyFile()
 
-	meta, err := NewMeta(metaDir, metaDir, testlogpath, ModeDir, defautFileRetention)
+	meta, err := NewMeta(metaDir, metaDir, testlogpath, ModeDir, "", defautFileRetention)
 	if err != nil {
 		t.Error(err)
 	}
@@ -33,7 +33,7 @@ func Test_Read(t *testing.T) {
 	}
 	absDir, err := filepath.Abs(dir)
 	assert.NoError(t, err)
-	assert.Equal(t, absDir, sf.Source())
+	assert.Equal(t, absDir, filepath.Dir(sf.Source()))
 	assert.NotEmpty(t, sf.Name())
 	buffer := make([]byte, 5)
 	n, err := sf.Read(buffer)
@@ -96,7 +96,7 @@ func Test_Read(t *testing.T) {
 
 func Test_NewReaderWithoutFile(t *testing.T) {
 	createDir()
-	meta, err := NewMeta(metaDir, metaDir, testlogpath, ModeDir, defautFileRetention)
+	meta, err := NewMeta(metaDir, metaDir, testlogpath, ModeDir, "", defautFileRetention)
 	if err != nil {
 		t.Error(err)
 	}
@@ -118,7 +118,7 @@ func Test_NewReaderWithoutFile(t *testing.T) {
 
 func Test_NewReaderWithQiniuLogFile(t *testing.T) {
 	createDir()
-	meta, err := NewMeta(metaDir, metaDir, testlogpath, ModeDir, defautFileRetention)
+	meta, err := NewMeta(metaDir, metaDir, testlogpath, ModeDir, "", defautFileRetention)
 	if err != nil {
 		t.Error(err)
 	}
@@ -142,7 +142,7 @@ func Test_NewReaderWithQiniuLogFile(t *testing.T) {
 
 func Test_NewReaderWithInvalidFile(t *testing.T) {
 	createDir()
-	meta, err := NewMeta(metaDir, metaDir, testlogpath, ModeDir, defautFileRetention)
+	meta, err := NewMeta(metaDir, metaDir, testlogpath, ModeDir, "", defautFileRetention)
 	if err != nil {
 		t.Error(err)
 	}
@@ -163,7 +163,7 @@ func Test_ReadWhenDelete(t *testing.T) {
 	createFile(1000)
 	defer destroyFile()
 
-	meta, err := NewMeta(metaDir, metaDir, testlogpath, ModeDir, defautFileRetention)
+	meta, err := NewMeta(metaDir, metaDir, testlogpath, ModeDir, "", defautFileRetention)
 	if err != nil {
 		t.Error(err)
 	}
@@ -192,7 +192,7 @@ func Test_ReadNewest(t *testing.T) {
 	createFile(1000)
 	defer destroyFile()
 
-	meta, err := NewMeta(metaDir, metaDir, testlogpath, ModeDir, defautFileRetention)
+	meta, err := NewMeta(metaDir, metaDir, testlogpath, ModeDir, "", defautFileRetention)
 	if err != nil {
 		t.Error(err)
 	}
@@ -207,7 +207,7 @@ func Test_ReadNewest(t *testing.T) {
 }
 
 func createHiddenFile() {
-	f, _ := os.OpenFile(hiddenFile, os.O_CREATE|os.O_WRONLY, defaultFilePerm)
+	f, _ := os.OpenFile(hiddenFile, os.O_CREATE|os.O_WRONLY, DefaultFilePerm)
 	f.WriteString("12345")
 	f.Sync()
 	f.Close()
@@ -218,21 +218,21 @@ func destroyHiddenFile() {
 }
 
 func createPidFile() {
-	f, _ := os.OpenFile(testPidFile, os.O_CREATE|os.O_WRONLY, defaultFilePerm)
+	f, _ := os.OpenFile(testPidFile, os.O_CREATE|os.O_WRONLY, DefaultFilePerm)
 	f.WriteString("12345")
 	f.Sync()
 	f.Close()
 }
 
 func createQiniuLogFile(dirC string) {
-	f, _ := os.OpenFile(dirC+"/"+testQiniuLogFile, os.O_CREATE|os.O_WRONLY, defaultFilePerm)
+	f, _ := os.OpenFile(dirC+"/"+testQiniuLogFile, os.O_CREATE|os.O_WRONLY, DefaultFilePerm)
 	f.WriteString("12345678")
 	f.Sync()
 	f.Close()
 }
 
 func createInvalidSuffixFile(dirC string) {
-	f, _ := os.OpenFile(dirC+"/"+testQiniuLogFileTest, os.O_CREATE|os.O_WRONLY, defaultFilePerm)
+	f, _ := os.OpenFile(dirC+"/"+testQiniuLogFileTest, os.O_CREATE|os.O_WRONLY, DefaultFilePerm)
 	f.WriteString("12345678")
 	f.Sync()
 	f.Close()

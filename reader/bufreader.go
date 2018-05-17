@@ -15,11 +15,13 @@ import (
 	"os"
 	"regexp"
 	"sync"
-
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/axgle/mahonia"
 	"github.com/qiniu/log"
+	"github.com/qiniu/logkit/utils"
+	"github.com/qiniu/logkit/utils/models"
 )
 
 const (
@@ -59,6 +61,9 @@ type BufReader struct {
 
 	meta            *Meta // 存放offset的元信息
 	multiLineRegexp *regexp.Regexp
+
+	stats     utils.StatsInfo
+	statsLock sync.RWMutex
 }
 
 const minReadBufferSize = 16
@@ -151,6 +156,7 @@ func (b *BufReader) reset(buf []byte, r FileReader) {
 		lineCache:    "",
 		lastSync:     LastSync{},
 		mux:          sync.Mutex{},
+		statsLock:    sync.RWMutex{},
 	}
 }
 
@@ -303,7 +309,7 @@ func (b *BufReader) readBytes(delim byte) ([]byte, error) {
 // For simple uses, a Scanner may be more convenient.
 func (b *BufReader) ReadString(delim byte) (ret string, err error) {
 	bytes, err := b.readBytes(delim)
-	ret = string(bytes)
+	ret = *(*string)(unsafe.Pointer(&bytes))
 	//默认都是utf-8
 	if b.meta.GetEncodingWay() != "" && b.meta.GetEncodingWay() != "utf-8" && b.decoder != nil {
 		ret = b.decoder.ConvertString(ret)
@@ -354,9 +360,14 @@ func (b *BufReader) ReadPattern() (string, error) {
 //ReadLine returns a string line as a normal Reader
 func (b *BufReader) ReadLine() (ret string, err error) {
 	if b.multiLineRegexp == nil {
-		return b.ReadString('\n')
+		ret, err = b.ReadString('\n')
+	} else {
+		ret, err = b.ReadPattern()
 	}
-	return b.ReadPattern()
+	if err != nil && err != io.EOF {
+		b.setStatsError(err.Error())
+	}
+	return
 }
 
 var errNegativeWrite = errors.New("bufio: writer returned negative count from Write")
@@ -382,6 +393,27 @@ func (b *BufReader) Source() string {
 func (b *BufReader) Close() error {
 	atomic.StoreInt32(&b.stopped, 1)
 	return b.rd.Close()
+}
+
+func (b *BufReader) Status() utils.StatsInfo {
+	b.statsLock.RLock()
+	defer b.statsLock.RUnlock()
+	return b.stats
+}
+
+func (b *BufReader) setStatsError(err string) {
+	b.statsLock.Lock()
+	defer b.statsLock.Unlock()
+	b.stats.LastError = err
+}
+
+func (b *BufReader) Lag() (rl *models.LagInfo, err error) {
+	lr, ok := b.rd.(LagReader)
+	if ok {
+		return lr.Lag()
+	}
+	err = fmt.Errorf("internal reader haven't support lag info yet")
+	return
 }
 
 func (b *BufReader) SyncMeta() {

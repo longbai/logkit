@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -10,9 +9,12 @@ import (
 	"time"
 
 	"github.com/qiniu/logkit/conf"
-	"github.com/qiniu/logkit/sender"
 	"github.com/qiniu/logkit/times"
 	"github.com/qiniu/logkit/utils"
+	. "github.com/qiniu/logkit/utils/models"
+
+	"github.com/json-iterator/go"
+	"github.com/qiniu/log"
 )
 
 // Type 类型常量
@@ -27,20 +29,28 @@ const (
 )
 
 const (
-	KeyCSVSchema   = "csv_schema"   // csv 每个列的列名和类型 long/string/float/date
-	KeyCSVSplitter = "csv_splitter" // csv 的分隔符
-	KeyCSVLabels   = "csv_labels"   // csv 额外增加的标签信息，比如机器信息等
+	KeyCSVSchema   = "csv_schema"      // csv 每个列的列名和类型 long/string/float/date
+	KeyCSVSplitter = "csv_splitter"    // csv 的分隔符
+	KeyCSVLabels   = "csv_labels"      // csv 额外增加的标签信息，比如机器信息等
+	KeyAutoRename  = "csv_auto_rename" // 是否将不合法的字段名称重命名一下, 比如 header-host 重命名为 header_host
 )
 
 const MaxParserSchemaErrOutput = 5
 
+var jsontool = jsoniter.Config{
+	EscapeHTML:             true,
+	UseNumber:              true,
+	ValidateJsonRawMessage: true,
+}.Froze()
+
 type CsvParser struct {
-	name           string
-	schema         []field
-	labels         []Label
-	delim          string
-	schemaErr      *schemaErr
-	timeZoneOffset int
+	name                 string
+	schema               []field
+	labels               []Label
+	delim                string
+	isAutoRename         bool
+	timeZoneOffset       int
+	disableRecordErrData bool
 }
 
 type field struct {
@@ -60,6 +70,7 @@ func NewCsvParser(c conf.MapConf) (LogParser, error) {
 	}
 	timeZoneOffsetRaw, _ := c.GetStringOr(KeyTimeZoneOffset, "")
 	timeZoneOffset := parseTimeZoneOffset(timeZoneOffsetRaw)
+	isAutoRename, _ := c.GetBoolOr(KeyAutoRename, false)
 
 	fieldList, err := parseSchemaFieldList(schema)
 	if err != nil {
@@ -83,16 +94,16 @@ func NewCsvParser(c conf.MapConf) (LogParser, error) {
 	}
 	labels := GetLabels(labelList, nameMap)
 
+	disableRecordErrData, _ := c.GetBoolOr(KeyDisableRecordErrData, false)
+
 	return &CsvParser{
-		name:   name,
-		schema: fields,
-		labels: labels,
-		delim:  splitter,
-		schemaErr: &schemaErr{
-			number: 0,
-			last:   time.Now(),
-		},
-		timeZoneOffset: timeZoneOffset,
+		name:                 name,
+		schema:               fields,
+		labels:               labels,
+		delim:                splitter,
+		isAutoRename:         isAutoRename,
+		timeZoneOffset:       timeZoneOffset,
+		disableRecordErrData: disableRecordErrData,
 	}, nil
 }
 
@@ -315,15 +326,15 @@ func convertValue(v interface{}, valueType CsvType) (ret interface{}, err error)
 	return
 }
 
-func (f field) ValueParse(value string, timeZoneOffset int) (datas sender.Data, err error) {
-	datas = sender.Data{}
+func (f field) ValueParse(value string, timeZoneOffset int) (datas Data, err error) {
+	datas = Data{}
 	switch f.dataType {
 	case TypeJsonMap:
 		if value == "" {
 			return
 		}
 		m := make(map[string]interface{})
-		if err = json.Unmarshal([]byte(value), &m); err != nil {
+		if err = jsontool.Unmarshal([]byte(value), &m); err != nil {
 			err = fmt.Errorf("unmarshal json map type error: %v", err)
 			return
 		}
@@ -363,8 +374,12 @@ func (p *CsvParser) Name() string {
 	return p.name
 }
 
-func (p *CsvParser) parse(line string) (sender.Data, error) {
-	d := sender.Data{}
+func (p *CsvParser) Type() string {
+	return TypeCSV
+}
+
+func (p *CsvParser) parse(line string) (Data, error) {
+	d := make(Data, len(p.schema)+len(p.labels))
 	parts := strings.Split(line, p.delim)
 	if len(parts) != len(p.schema) {
 		return nil, fmt.Errorf("schema length not match: schema %v length %v, actual column %v length %v", p.schema, len(p.schema), parts, len(parts))
@@ -384,19 +399,41 @@ func (p *CsvParser) parse(line string) (sender.Data, error) {
 	return d, nil
 }
 
-func (p *CsvParser) Parse(lines []string) ([]sender.Data, error) {
-	datas := []sender.Data{}
+func (p *CsvParser) Rename(datas []Data) []Data {
+	newData := make([]Data, 0)
+	for _, d := range datas {
+		data := make(Data)
+		for key, val := range d {
+			newKey := strings.Replace(key, "-", "_", -1)
+			data[newKey] = val
+		}
+		newData = append(newData, data)
+	}
+	return newData
+}
+
+func (p *CsvParser) Parse(lines []string) ([]Data, error) {
+	datas := []Data{}
 	se := &utils.StatsError{}
 	for idx, line := range lines {
 		d, err := p.parse(line)
 		if err != nil {
-			p.schemaErr.Output(err)
+			log.Debug(err)
 			se.AddErrors()
 			se.ErrorIndex = append(se.ErrorIndex, idx)
+			se.ErrorDetail = err
+			if !p.disableRecordErrData {
+				errData := make(Data)
+				errData[KeyPandoraStash] = line
+				datas = append(datas, errData)
+			}
 			continue
 		}
 		datas = append(datas, d)
 		se.AddSuccess()
+	}
+	if p.isAutoRename {
+		datas = p.Rename(datas)
 	}
 	return datas, se
 }

@@ -10,13 +10,17 @@ import (
 	"time"
 
 	"github.com/qiniu/log"
+	"github.com/qiniu/logkit/utils"
+
+	elasticV6 "github.com/olivere/elastic"
 	elasticV3 "gopkg.in/olivere/elastic.v3"
 	elasticV5 "gopkg.in/olivere/elastic.v5"
 )
 
 var (
-	ElasticVersion2 = "2.x"
+	ElasticVersion3 = "3.x"
 	ElasticVersion5 = "5.x"
+	ElasticVersion6 = "6.x"
 )
 
 type ElasticReader struct {
@@ -30,6 +34,9 @@ type ElasticReader struct {
 
 	meta   *Meta  // 记录offset的元数据
 	offset string // 当前处理es的offset
+
+	stats     utils.StatsInfo
+	statsLock sync.RWMutex
 
 	status  int32
 	mux     sync.Mutex
@@ -54,6 +61,7 @@ func NewESReader(meta *Meta, readBatch int, estype, esindex, eshost, esVersion, 
 		offset:    offset,
 		readChan:  make(chan json.RawMessage),
 		mux:       sync.Mutex{},
+		statsLock: sync.RWMutex{},
 		started:   false,
 	}
 
@@ -68,8 +76,20 @@ func (er *ElasticReader) Source() string {
 	return er.eshost + "_" + er.esindex + "_" + er.estype
 }
 
+func (er *ElasticReader) setStatsError(err string) {
+	er.statsLock.Lock()
+	defer er.statsLock.Unlock()
+	er.stats.LastError = err
+}
+
+func (er *ElasticReader) Status() utils.StatsInfo {
+	er.statsLock.RLock()
+	defer er.statsLock.RUnlock()
+	return er.stats
+}
+
 func (er *ElasticReader) Close() (err error) {
-	if atomic.CompareAndSwapInt32(&er.status, StatusRunning, StatusStoping) {
+	if atomic.CompareAndSwapInt32(&er.status, StatusRunning, StatusStopping) {
 		log.Infof("Runner[%v] %v stopping", er.meta.RunnerName, er.Name())
 	} else {
 		close(er.readChan)
@@ -116,7 +136,7 @@ func (er *ElasticReader) run() (err error) {
 	// running在退出状态改为Init
 	defer func() {
 		atomic.CompareAndSwapInt32(&er.status, StatusRunning, StatusInit)
-		if atomic.CompareAndSwapInt32(&er.status, StatusStoping, StatusStopped) {
+		if atomic.CompareAndSwapInt32(&er.status, StatusStopping, StatusStopped) {
 			close(er.readChan)
 		}
 		if err == nil {
@@ -126,7 +146,7 @@ func (er *ElasticReader) run() (err error) {
 
 	// 开始work逻辑
 	for {
-		if atomic.LoadInt32(&er.status) == StatusStoping {
+		if atomic.LoadInt32(&er.status) == StatusStopping {
 			log.Warnf("%v stopped from running", er.Name())
 			return
 		}
@@ -136,6 +156,7 @@ func (er *ElasticReader) run() (err error) {
 			return
 		}
 		log.Error(err)
+		er.setStatsError(err.Error())
 		time.Sleep(3 * time.Second)
 	}
 }
@@ -143,6 +164,33 @@ func (er *ElasticReader) run() (err error) {
 func (er *ElasticReader) exec() (err error) {
 	// Create a client
 	switch er.esVersion {
+	case ElasticVersion6:
+		var client *elasticV6.Client
+		client, err = elasticV6.NewClient(elasticV6.SetURL(er.eshost))
+		if err != nil {
+			return
+		}
+		scroll := client.Scroll(er.esindex).Type(er.estype).Size(er.readBatch).KeepAlive(er.keepAlive)
+		for {
+			ctx := context.Background()
+			results, err := scroll.ScrollId(er.offset).Do(ctx)
+			if err == io.EOF {
+				return nil // all results retrieved
+			}
+			if err != nil {
+				return err // something went wrong
+			}
+
+			// Send the hits to the hits channel
+			for _, hit := range results.Hits.Hits {
+				er.readChan <- *hit.Source
+			}
+			er.offset = results.ScrollId
+			if atomic.LoadInt32(&er.status) == StatusStopping {
+				log.Warnf("Runner[%v] %v stopped from running", er.meta.RunnerName, er.Name())
+				return nil
+			}
+		}
 	case ElasticVersion5:
 		var client *elasticV5.Client
 		client, err = elasticV5.NewClient(elasticV5.SetURL(er.eshost))
@@ -165,7 +213,7 @@ func (er *ElasticReader) exec() (err error) {
 				er.readChan <- *hit.Source
 			}
 			er.offset = results.ScrollId
-			if atomic.LoadInt32(&er.status) == StatusStoping {
+			if atomic.LoadInt32(&er.status) == StatusStopping {
 				log.Warnf("Runner[%v] %v stopped from running", er.meta.RunnerName, er.Name())
 				return nil
 			}
@@ -191,7 +239,7 @@ func (er *ElasticReader) exec() (err error) {
 				er.readChan <- *hit.Source
 			}
 			er.offset = results.ScrollId
-			if atomic.LoadInt32(&er.status) == StatusStoping {
+			if atomic.LoadInt32(&er.status) == StatusStopping {
 				log.Warnf("Runner[%v] %v stopped from running", er.meta.RunnerName, er.Name())
 				return nil
 			}

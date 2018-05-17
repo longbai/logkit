@@ -1,7 +1,7 @@
 package reader
 
 import (
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,8 +12,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/json-iterator/go"
 	"github.com/qiniu/log"
 	"github.com/qiniu/logkit/utils"
+	"github.com/qiniu/logkit/utils/models"
 )
 
 type MultiReader struct {
@@ -35,17 +37,24 @@ type MultiReader struct {
 	statInterval   time.Duration
 	maxOpenFiles   int
 	whence         string
+
+	stats     utils.StatsInfo
+	statsLock sync.RWMutex
 }
 
 type ActiveReader struct {
 	cacheLineMux sync.RWMutex
 	br           *BufReader
-	logpath      string
+	realpath     string
+	originpath   string
 	readcache    string
 	msgchan      chan<- Result
 	status       int32
 	inactive     int32 //当inactive>0 时才会被expire回收
 	runnerName   string
+
+	stats     utils.StatsInfo
+	statsLock sync.RWMutex
 }
 
 type Result struct {
@@ -53,15 +62,16 @@ type Result struct {
 	logpath string
 }
 
-func NewActiveReader(logPath, whence string, meta *Meta, msgChan chan<- Result) (ar *ActiveReader, err error) {
-	rpath := strings.Replace(logPath, string(os.PathSeparator), "_", -1)
+func NewActiveReader(originPath, realPath, whence string, meta *Meta, msgChan chan<- Result) (ar *ActiveReader, err error) {
+	rpath := strings.Replace(realPath, string(os.PathSeparator), "_", -1)
 	subMetaPath := filepath.Join(meta.dir, rpath)
-	subMeta, err := NewMeta(subMetaPath, subMetaPath, logPath, ModeFile, defautFileRetention)
+	subMeta, err := NewMeta(subMetaPath, subMetaPath, realPath, ModeFile, meta.tagFile, defautFileRetention)
 	if err != nil {
 		return nil, err
 	}
 	subMeta.readlimit = meta.readlimit
-	fr, err := NewSingleFile(subMeta, logPath, whence)
+	isFromWeb := false
+	fr, err := NewSingleFile(subMeta, realPath, whence, isFromWeb)
 	if err != nil {
 		return
 	}
@@ -72,26 +82,28 @@ func NewActiveReader(logPath, whence string, meta *Meta, msgChan chan<- Result) 
 	ar = &ActiveReader{
 		cacheLineMux: sync.RWMutex{},
 		br:           bf,
-		logpath:      logPath,
+		realpath:     realPath,
+		originpath:   originPath,
 		msgchan:      msgChan,
 		inactive:     1,
 		runnerName:   meta.RunnerName,
 		status:       StatusInit,
+		statsLock:    sync.RWMutex{},
 	}
 	return
 }
 
 func (ar *ActiveReader) Run() {
 	if !atomic.CompareAndSwapInt32(&ar.status, StatusInit, StatusRunning) {
-		log.Errorf("Runner[%v] ActiveReader %s was not in StatusInit before Running,exit it...", ar.runnerName, ar.logpath)
+		log.Errorf("Runner[%v] ActiveReader %s was not in StatusInit before Running,exit it...", ar.runnerName, ar.originpath)
 		return
 	}
 	var err error
 	timer := time.NewTicker(time.Second)
 	for {
-		if atomic.LoadInt32(&ar.status) == StatusStopped || atomic.LoadInt32(&ar.status) == StatusStoping {
-			atomic.CompareAndSwapInt32(&ar.status, StatusStoping, StatusStopped)
-			log.Warnf("Runner[%v] ActiveReader %s was stopped", ar.runnerName, ar.logpath)
+		if atomic.LoadInt32(&ar.status) == StatusStopped || atomic.LoadInt32(&ar.status) == StatusStopping {
+			atomic.CompareAndSwapInt32(&ar.status, StatusStopping, StatusStopped)
+			log.Warnf("Runner[%v] ActiveReader %s was stopped", ar.runnerName, ar.originpath)
 			return
 		}
 		if ar.readcache == "" {
@@ -99,19 +111,20 @@ func (ar *ActiveReader) Run() {
 			ar.readcache, err = ar.br.ReadLine()
 			ar.cacheLineMux.Unlock()
 			if err != nil && err != io.EOF {
-				log.Warnf("Runner[%v] ActiveReader %s read error: %v", ar.runnerName, ar.logpath, err)
+				log.Warnf("Runner[%v] ActiveReader %s read error: %v", ar.runnerName, ar.originpath, err)
+				ar.setStatsError(err.Error())
 				time.Sleep(3 * time.Second)
 				continue
 			}
 			//文件EOF，同时没有任何内容，代表不是第一次EOF，休息时间设置长一些
 			if ar.readcache == "" && err == io.EOF {
 				atomic.StoreInt32(&ar.inactive, 1)
-				log.Debugf("Runner[%v] %v meet EOF, ActiveReader was inactive now, sleep 5 seconds", ar.runnerName, ar.logpath)
+				log.Debugf("Runner[%v] %v meet EOF, ActiveReader was inactive now, sleep 5 seconds", ar.runnerName, ar.originpath)
 				time.Sleep(5 * time.Second)
 				continue
 			}
 		}
-		log.Debugf("Runner[%v] %v >>>>>>readcache <%v> linecache <%v>", ar.runnerName, ar.logpath, ar.readcache, ar.br.lineCache)
+		log.Debugf("Runner[%v] %v >>>>>>readcache <%v> linecache <%v>", ar.runnerName, ar.originpath, ar.readcache, ar.br.lineCache)
 		repeat := 0
 		for {
 			if ar.readcache == "" {
@@ -119,18 +132,18 @@ func (ar *ActiveReader) Run() {
 			}
 			repeat++
 			if repeat%3000 == 0 {
-				log.Errorf("Runner[%v] %v ActiveReader has timeout 3000 times with readcache %v", ar.runnerName, ar.logpath, ar.readcache)
+				log.Errorf("Runner[%v] %v ActiveReader has timeout 3000 times with readcache %v", ar.runnerName, ar.originpath, ar.readcache)
 			}
 
 			atomic.StoreInt32(&ar.inactive, 0)
 			//做这一层结构为了快速结束
-			if atomic.LoadInt32(&ar.status) == StatusStopped || atomic.LoadInt32(&ar.status) == StatusStoping {
-				log.Debugf("Runner[%v] %v ActiveReader was stopped when waiting to send data", ar.runnerName, ar.logpath)
-				atomic.CompareAndSwapInt32(&ar.status, StatusStoping, StatusStopped)
+			if atomic.LoadInt32(&ar.status) == StatusStopped || atomic.LoadInt32(&ar.status) == StatusStopping {
+				log.Debugf("Runner[%v] %v ActiveReader was stopped when waiting to send data", ar.runnerName, ar.originpath)
+				atomic.CompareAndSwapInt32(&ar.status, StatusStopping, StatusStopped)
 				return
 			}
 			select {
-			case ar.msgchan <- Result{result: ar.readcache, logpath: ar.logpath}:
+			case ar.msgchan <- Result{result: ar.readcache, logpath: ar.originpath}:
 				ar.cacheLineMux.Lock()
 				ar.readcache = ""
 				ar.cacheLineMux.Unlock()
@@ -140,11 +153,11 @@ func (ar *ActiveReader) Run() {
 	}
 }
 func (ar *ActiveReader) Close() error {
-	defer log.Warnf("Runner[%v] ActiveReader %s was closed", ar.runnerName, ar.logpath)
+	defer log.Warnf("Runner[%v] ActiveReader %s was closed", ar.runnerName, ar.originpath)
 	err := ar.br.Close()
 
-	if atomic.CompareAndSwapInt32(&ar.status, StatusRunning, StatusStoping) {
-		log.Warnf("Runner[%v] ActiveReader %s was closing", ar.runnerName, ar.logpath)
+	if atomic.CompareAndSwapInt32(&ar.status, StatusRunning, StatusStopping) {
+		log.Warnf("Runner[%v] ActiveReader %s was closing", ar.runnerName, ar.originpath)
 	} else {
 		return err
 	}
@@ -155,12 +168,28 @@ func (ar *ActiveReader) Close() error {
 		cnt++
 		//超过300个10ms，即3s，就强行退出
 		if cnt > 300 {
-			log.Errorf("Runner[%v] ActiveReader %s was not closed after 3s, force closing it", ar.runnerName, ar.logpath)
+			log.Errorf("Runner[%v] ActiveReader %s was not closed after 3s, force closing it", ar.runnerName, ar.originpath)
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	return err
+}
+
+func (ar *ActiveReader) setStatsError(err string) {
+	ar.statsLock.Lock()
+	defer ar.statsLock.Unlock()
+	ar.stats.LastError = err
+}
+
+func (ar *ActiveReader) Status() utils.StatsInfo {
+	ar.statsLock.RLock()
+	defer ar.statsLock.RUnlock()
+	return ar.stats
+}
+
+func (ar *ActiveReader) Lag() (rl *models.LagInfo, err error) {
+	return ar.br.Lag()
 }
 
 //除了sync自己的bufreader，还要sync一行linecache
@@ -172,12 +201,12 @@ func (ar *ActiveReader) SyncMeta() string {
 }
 
 func (ar *ActiveReader) expired(expireDur time.Duration) bool {
-	fi, err := os.Stat(ar.logpath)
+	fi, err := os.Stat(ar.realpath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return true
 		}
-		log.Errorf("Runner[%v] stat log %v error %v,will not expire it...", ar.runnerName, ar.logpath, err)
+		log.Errorf("Runner[%v] stat log %v error %v,will not expire it...", ar.runnerName, ar.originpath, err)
 		return false
 	}
 	if fi.ModTime().Add(expireDur).Before(time.Now()) && atomic.LoadInt32(&ar.inactive) > 0 {
@@ -220,6 +249,7 @@ func NewMultiReader(meta *Meta, logPathPattern, whence, expireDur, statIntervalD
 		cacheMap:       make(map[string]string),        //armapmux
 		armapmux:       sync.Mutex{},
 		msgChan:        make(chan Result),
+		statsLock:      sync.RWMutex{},
 	}
 	buf := make([]byte, bufsize)
 	if bufsize > 0 {
@@ -231,7 +261,7 @@ func NewMultiReader(meta *Meta, logPathPattern, whence, expireDur, statIntervalD
 				log.Warnf("Runner[%v] %v read buf error %v, ignore...", mr.meta.RunnerName, mr.Name(), err)
 			}
 		} else {
-			err = json.Unmarshal(buf, &mr.cacheMap)
+			err = jsoniter.Unmarshal(buf, &mr.cacheMap)
 			if err != nil {
 				log.Warnf("Runner[%v] %v Unmarshal read buf error %v, ignore...", mr.meta.RunnerName, mr.Name(), err)
 			}
@@ -285,6 +315,7 @@ func (mr *MultiReader) StatLogPath() {
 	matches, err := filepath.Glob(mr.logPathPattern)
 	if err != nil {
 		log.Errorf("Runner[%v] stat logPathPattern error %v", mr.meta.RunnerName, err)
+		mr.setStatsError("Runner[" + mr.meta.RunnerName + "] stat logPathPattern error " + err.Error())
 		return
 	}
 	if len(matches) > 0 {
@@ -312,7 +343,7 @@ func (mr *MultiReader) StatLogPath() {
 			log.Debugf("Runner[%v] <%v> is expired, ignore...", mr.meta.RunnerName, mc)
 			continue
 		}
-		ar, err := NewActiveReader(rp, mr.whence, mr.meta, mr.msgChan)
+		ar, err := NewActiveReader(mc, rp, mr.whence, mr.meta, mr.msgChan)
 		if err != nil {
 			log.Errorf("Runner[%v] NewActiveReader for matches %v error %v, ignore this match...", mr.meta.RunnerName, rp, err)
 			continue
@@ -322,6 +353,7 @@ func (mr *MultiReader) StatLogPath() {
 			err = ar.br.SetMode(ReadModeHeadPatternRegexp, mr.headRegexp)
 			if err != nil {
 				log.Errorf("Runner[%v] NewActiveReader for matches %v SetMode error %v", mr.meta.RunnerName, rp, err)
+				mr.setStatsError("Runner[" + mr.meta.RunnerName + "] NewActiveReader for matches " + rp + " SetMode error " + err.Error())
 			}
 		}
 		newaddsPath = append(newaddsPath, rp)
@@ -361,6 +393,26 @@ func (mr *MultiReader) Source() string {
 	return mr.curFile
 }
 
+func (mr *MultiReader) setStatsError(err string) {
+	mr.statsLock.Lock()
+	defer mr.statsLock.Unlock()
+	mr.stats.LastError = err
+}
+
+func (mr *MultiReader) Status() utils.StatsInfo {
+	mr.statsLock.RLock()
+	defer mr.statsLock.RUnlock()
+
+	ars := mr.getActiveReaders()
+	for _, ar := range ars {
+		st := ar.Status()
+		if st.LastError != "" {
+			mr.stats.LastError += "\n<" + ar.originpath + ">: " + st.LastError
+		}
+	}
+	return mr.stats
+}
+
 func (mr *MultiReader) Close() (err error) {
 	atomic.StoreInt32(&mr.status, StatusStopped)
 	// 停10ms为了管道中的数据传递完毕，确认reader run函数已经结束不会再读取，保证syncMeta的正确性
@@ -374,7 +426,7 @@ func (mr *MultiReader) Close() (err error) {
 			defer wg.Done()
 			xerr := mar.Close()
 			if xerr != nil {
-				log.Errorf("Runner[%v] Close ActiveReader %v error %v", mr.meta.RunnerName, ar.logpath, xerr)
+				log.Errorf("Runner[%v] Close ActiveReader %v error %v", mr.meta.RunnerName, ar.originpath, xerr)
 			}
 		}(ar)
 	}
@@ -432,11 +484,11 @@ func (mr *MultiReader) SyncMeta() {
 	for _, ar := range ars {
 		readcache := ar.SyncMeta()
 		mr.armapmux.Lock()
-		mr.cacheMap[ar.logpath] = readcache
+		mr.cacheMap[ar.realpath] = readcache
 		mr.armapmux.Unlock()
 	}
 	mr.armapmux.Lock()
-	buf, err := json.Marshal(mr.cacheMap)
+	buf, err := jsoniter.Marshal(mr.cacheMap)
 	mr.armapmux.Unlock()
 	if err != nil {
 		log.Errorf("%v sync meta error %v, cacheMap %v", mr.Name(), err, mr.cacheMap)
@@ -446,6 +498,40 @@ func (mr *MultiReader) SyncMeta() {
 	if err != nil {
 		log.Errorf("%v sync meta WriteBuf error %v, buf %v", mr.Name(), err, string(buf))
 		return
+	}
+	return
+}
+
+func (mr *MultiReader) Lag() (rl *models.LagInfo, err error) {
+	rl = &models.LagInfo{}
+	ars := mr.getActiveReaders()
+	for _, ar := range ars {
+		lg, err := ar.Lag()
+		if err != nil {
+			log.Warn(err)
+			continue
+		}
+		rl.Size += lg.Size
+	}
+	rl.SizeUnit = "bytes"
+	return
+}
+
+func (mr *MultiReader) Reset() (err error) {
+	errMsg := make([]string, 0)
+	if err = mr.meta.Reset(); err != nil {
+		errMsg = append(errMsg, err.Error())
+	}
+	ars := mr.getActiveReaders()
+	for _, ar := range ars {
+		if ar.br != nil {
+			if subErr := ar.br.meta.Reset(); subErr != nil {
+				errMsg = append(errMsg, subErr.Error())
+			}
+		}
+	}
+	if len(errMsg) != 0 {
+		err = errors.New(strings.Join(errMsg, "\n"))
 	}
 	return
 }

@@ -1,7 +1,6 @@
 package reader
 
 import (
-	"encoding/json"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -9,6 +8,9 @@ import (
 
 	"github.com/qiniu/logkit/utils"
 
+	"strings"
+
+	"github.com/json-iterator/go"
 	"github.com/qiniu/log"
 	"github.com/robfig/cron"
 	"gopkg.in/mgo.v2"
@@ -30,16 +32,20 @@ type MongoReader struct {
 	readBatch         int // 每次读取的数据量
 	collectionFilters map[string]CollectionFilter
 
-	Cron     *cron.Cron  //定时任务
-	readChan chan []byte //bson
-	meta     *Meta       // 记录offset的元数据
-	session  *mgo.Session
-	offset   interface{} //对于默认的offset_key: "_id", 是objectID作为offset，存储的表现形式是string，其他则是int64
+	Cron         *cron.Cron //定时任务
+	loop         bool
+	loopDuration time.Duration
+	readChan     chan []byte //bson
+	meta         *Meta       // 记录offset的元数据
+	session      *mgo.Session
+	offset       interface{} //对于默认的offset_key: "_id", 是objectID作为offset，存储的表现形式是string，其他则是int64
 
 	execOnStart bool
 	status      int32
 	started     bool
 	mux         sync.Mutex
+	stats       utils.StatsInfo
+	statsLock   sync.RWMutex
 }
 
 func NewMongoReader(meta *Meta, readBatch int, host, database, collection, offsetkey, cronSched, filters, certfile string, execOnStart bool) (mr *MongoReader, err error) {
@@ -70,6 +76,7 @@ func NewMongoReader(meta *Meta, readBatch int, host, database, collection, offse
 		execOnStart:       execOnStart,
 		started:           false,
 		mux:               sync.Mutex{},
+		statsLock:         sync.RWMutex{},
 	}
 	if offsetkey == MongoDefaultOffsetKey {
 		if bson.IsObjectIdHex(keyOrObj) {
@@ -82,17 +89,27 @@ func NewMongoReader(meta *Meta, readBatch int, host, database, collection, offse
 	}
 
 	if filters != "" {
-		if jerr := json.Unmarshal([]byte(filters), &mr.collectionFilters); jerr != nil {
+		if jerr := jsoniter.Unmarshal([]byte(filters), &mr.collectionFilters); jerr != nil {
 			err = errors.New("malformed collection_filters")
 			return
 		}
 	}
 	if len(cronSched) > 0 {
-		err = mr.Cron.AddFunc(cronSched, mr.run)
-		if err != nil {
-			return
+		cronSched = strings.ToLower(cronSched)
+		if strings.HasPrefix(cronSched, Loop) {
+			mr.loop = true
+			mr.loopDuration, err = parseLoopDuration(cronSched)
+			if err != nil {
+				log.Errorf("Runner[%v] %v %v", mr.meta.RunnerName, mr.Name(), err)
+				err = nil
+			}
+		} else {
+			err = mr.Cron.AddFunc(cronSched, mr.run)
+			if err != nil {
+				return
+			}
+			log.Infof("Runner[%v] %v Cron added with schedule <%v>", mr.meta.RunnerName, mr.Name(), cronSched)
 		}
-		log.Infof("Runner[%v] %v Cron added with schedule <%v>", mr.meta.RunnerName, mr.Name(), cronSched)
 	}
 
 	return mr, nil
@@ -106,12 +123,24 @@ func (mr *MongoReader) Source() string {
 	return mr.host + "_" + mr.database + "_" + mr.collection
 }
 
+func (mr *MongoReader) Status() utils.StatsInfo {
+	mr.statsLock.RLock()
+	defer mr.statsLock.RUnlock()
+	return mr.stats
+}
+
+func (mr *MongoReader) setStatsError(err string) {
+	mr.statsLock.Lock()
+	defer mr.statsLock.Unlock()
+	mr.stats.LastError = err
+}
+
 func (mr *MongoReader) Close() (err error) {
 	mr.Cron.Stop()
 	if mr.session != nil {
 		mr.session.Close()
 	}
-	if atomic.CompareAndSwapInt32(&mr.status, StatusRunning, StatusStoping) {
+	if atomic.CompareAndSwapInt32(&mr.status, StatusRunning, StatusStopping) {
 		log.Infof("Runner[%v] %v stopping", mr.meta.RunnerName, mr.Name())
 	} else {
 		close(mr.readChan)
@@ -126,12 +155,27 @@ func (mr *MongoReader) Start() {
 	if mr.started {
 		return
 	}
-	if mr.execOnStart {
-		go mr.run()
+	if mr.loop {
+		go mr.LoopRun()
+	} else {
+		if mr.execOnStart {
+			go mr.run()
+		}
 		mr.Cron.Start()
 	}
 	mr.started = true
 	log.Infof("Runner[%v] %v pull data daemon started", mr.meta.RunnerName, mr.Name())
+}
+
+func (mr *MongoReader) LoopRun() {
+	for {
+		if atomic.LoadInt32(&mr.status) == StatusStopping {
+			log.Warnf("Runner[%v] %v stopped from running", mr.meta.RunnerName, mr.Name())
+			return
+		}
+		mr.run()
+		time.Sleep(mr.loopDuration)
+	}
 }
 
 func (mr *MongoReader) ReadLine() (data string, err error) {
@@ -159,10 +203,11 @@ func (mr *MongoReader) run() {
 			break
 		}
 	}
-	// running在退出状态改为Init
+	// running时退出 状态改为Init，以便 cron 调度下次运行
+	// stopping时推出改为 stopped，不再运行
 	defer func() {
 		atomic.CompareAndSwapInt32(&mr.status, StatusRunning, StatusInit)
-		if atomic.CompareAndSwapInt32(&mr.status, StatusStoping, StatusStopped) {
+		if atomic.CompareAndSwapInt32(&mr.status, StatusStopping, StatusStopped) {
 			close(mr.readChan)
 		}
 		if err == nil {
@@ -172,7 +217,7 @@ func (mr *MongoReader) run() {
 
 	// 开始work逻辑
 	for {
-		if atomic.LoadInt32(&mr.status) == StatusStoping {
+		if atomic.LoadInt32(&mr.status) == StatusStopping {
 			log.Warnf("Runner[%v] %v stopped from running", mr.meta.RunnerName, mr.Name())
 			return
 		}
@@ -182,6 +227,7 @@ func (mr *MongoReader) run() {
 			return
 		}
 		log.Error(err)
+		mr.setStatsError(err.Error())
 		time.Sleep(3 * time.Second)
 	}
 }
@@ -220,14 +266,14 @@ func (mr *MongoReader) exec() (err error) {
 
 	var result bson.M
 	for iter.Next(&result) {
-		if atomic.LoadInt32(&mr.status) == StatusStoping {
+		if atomic.LoadInt32(&mr.status) == StatusStopping {
 			log.Warnf("Runner[%v] %v stopped from running", mr.meta.RunnerName, mr.Name())
 			return nil
 		}
 		if id, ok := result[mr.offsetkey]; ok {
 			mr.offset = id
 		}
-		bytes, ierr := json.Marshal(result)
+		bytes, ierr := jsoniter.Marshal(result)
 		if ierr != nil {
 			log.Errorf("Runner[%v] %v json marshal inner error %v", mr.meta.RunnerName, result, ierr)
 		}

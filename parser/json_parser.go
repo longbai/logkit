@@ -1,19 +1,20 @@
 package parser
 
 import (
-	"bytes"
-	"encoding/json"
-	"time"
+	"fmt"
 
+	"github.com/json-iterator/go"
+	"github.com/qiniu/log"
 	"github.com/qiniu/logkit/conf"
-	"github.com/qiniu/logkit/sender"
 	"github.com/qiniu/logkit/utils"
+	. "github.com/qiniu/logkit/utils/models"
 )
 
 type JsonParser struct {
-	name      string
-	labels    []Label
-	schemaErr *schemaErr
+	name                 string
+	labels               []Label
+	disableRecordErrData bool
+	jsontool             jsoniter.API
 }
 
 func NewJsonParser(c conf.MapConf) (LogParser, error) {
@@ -21,14 +22,18 @@ func NewJsonParser(c conf.MapConf) (LogParser, error) {
 	labelList, _ := c.GetStringListOr(KeyLabels, []string{})
 	nameMap := map[string]struct{}{}
 	labels := GetLabels(labelList, nameMap)
+	jsontool := jsoniter.Config{
+		EscapeHTML: true,
+		UseNumber:  true,
+	}.Froze()
+
+	disableRecordErrData, _ := c.GetBoolOr(KeyDisableRecordErrData, false)
 
 	return &JsonParser{
-		name:   name,
-		labels: labels,
-		schemaErr: &schemaErr{
-			number: 0,
-			last:   time.Now(),
-		},
+		name:                 name,
+		labels:               labels,
+		jsontool:             jsontool,
+		disableRecordErrData: disableRecordErrData,
 	}, nil
 }
 
@@ -36,15 +41,24 @@ func (im *JsonParser) Name() string {
 	return im.name
 }
 
-func (im *JsonParser) Parse(lines []string) ([]sender.Data, error) {
-	datas := []sender.Data{}
+func (im *JsonParser) Type() string {
+	return TypeJson
+}
+
+func (im *JsonParser) Parse(lines []string) ([]Data, error) {
+	datas := []Data{}
 	se := &utils.StatsError{}
 	for idx, line := range lines {
 		data, err := im.parseLine(line)
 		if err != nil {
-			im.schemaErr.Output(err)
 			se.AddErrors()
 			se.ErrorIndex = append(se.ErrorIndex, idx)
+			se.ErrorDetail = err
+			if !im.disableRecordErrData {
+				errData := make(Data)
+				errData[KeyPandoraStash] = line
+				datas = append(datas, errData)
+			}
 			continue
 		}
 		datas = append(datas, data)
@@ -53,11 +67,11 @@ func (im *JsonParser) Parse(lines []string) ([]sender.Data, error) {
 	return datas, se
 }
 
-func (im *JsonParser) parseLine(line string) (data sender.Data, err error) {
-	data = sender.Data{}
-	decoder := json.NewDecoder(bytes.NewReader([]byte(line)))
-	decoder.UseNumber()
-	if err = decoder.Decode(&data); err != nil {
+func (im *JsonParser) parseLine(line string) (data Data, err error) {
+	data = Data{}
+	if err = im.jsontool.Unmarshal([]byte(line), &data); err != nil {
+		err = fmt.Errorf("parse json line error %v, raw data is: %v", err, line)
+		log.Debug(err)
 		return
 	}
 	for _, l := range im.labels {

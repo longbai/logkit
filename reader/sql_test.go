@@ -1,11 +1,14 @@
 package reader
 
 import (
+	"fmt"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/qiniu/logkit/conf"
+	"github.com/qiniu/logkit/utils"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -141,7 +144,7 @@ func TestSQLReader(t *testing.T) {
 		offsets:   []int64{123, 456},
 		dbtype:    "mysql",
 	}
-	assert.Equal(t, "_"+database, mr.Source())
+	assert.Equal(t, mr.dbtype+"_"+database, mr.Source())
 
 	// 测试meta备份和恢复
 	mr.SyncMeta()
@@ -149,7 +152,7 @@ func TestSQLReader(t *testing.T) {
 	assert.EqualValues(t, mr.offsets, gotoffsets, "got offsets error")
 	assert.EqualValues(t, mr.syncSQLs, gotsqls, "got sqls error")
 	assert.EqualValues(t, false, omit)
-	assert.EqualValues(t, "MYSQL_Reader:"+mr.database+"_"+hash(mr.rawsqls), mr.Name())
+	assert.EqualValues(t, "MYSQL_Reader:"+mr.database+"_"+utils.Hash(mr.rawsqls), mr.Name())
 
 	// 测试更新Offset
 	expoffsets := []int64{123, 0, 0}
@@ -166,6 +169,8 @@ func TestSQLReader(t *testing.T) {
 	gotSQL, err = mr.getSQL(0)
 	assert.NoError(t, err)
 	assert.EqualValues(t, testsqls[0]+" LIMIT 123,223;", gotSQL)
+
+	assert.Equal(t, utils.StatsInfo{}, mr.Status())
 }
 
 func TestUpdateSql(t *testing.T) {
@@ -173,4 +178,15 @@ func TestUpdateSql(t *testing.T) {
 	syncSQLs := []string{"select * from mysql123", "select * from mysql345"}
 	got := updateSqls(rawsqls, time.Now())
 	assert.EqualValues(t, syncSQLs, got)
+}
+
+func TestReflectTime(t *testing.T) {
+	fmt.Println(reflect.TypeOf(int64(0)))
+	fmt.Println(reflect.TypeOf(int32(0)))
+	fmt.Println(reflect.TypeOf(int16(0)))
+	fmt.Println(reflect.TypeOf(""))
+	fmt.Println(reflect.TypeOf(false))
+	fmt.Println(reflect.TypeOf(time.Time{}))
+	fmt.Println(reflect.TypeOf([]byte{}))
+	fmt.Println(reflect.TypeOf(new(interface{})).Elem())
 }

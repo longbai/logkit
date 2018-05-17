@@ -9,12 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qiniu/log"
 	"github.com/qiniu/logkit/conf"
-	"github.com/qiniu/logkit/sender"
 	"github.com/qiniu/logkit/times"
 	"github.com/qiniu/logkit/utils"
-
-	"github.com/qiniu/log"
+	. "github.com/qiniu/logkit/utils/models"
 	"github.com/vjeantet/grok"
 )
 
@@ -53,13 +52,12 @@ var (
 )
 
 type GrokParser struct {
-	name   string
-	labels []Label
-	mode   string
+	name                 string
+	labels               []Label
+	mode                 string
+	disableRecordErrData bool
 
 	timeZoneOffset int
-
-	schemaErr *schemaErr
 
 	Patterns []string // 正式的pattern名称
 	// namedPatterns is a list of internally-assigned names to the patterns
@@ -128,18 +126,17 @@ func NewGrokParser(c conf.MapConf) (LogParser, error) {
 	customPatterns, _ := c.GetStringOr(KeyGrokCustomPatterns, "")
 	customPatternFiles, _ := c.GetStringListOr(KeyGrokCustomPatternFiles, []string{})
 
+	disableRecordErrData, _ := c.GetBoolOr(KeyDisableRecordErrData, false)
+
 	p := &GrokParser{
-		name:               name,
-		labels:             labels,
-		mode:               mode,
-		Patterns:           patterns,
-		CustomPatterns:     customPatterns,
-		CustomPatternFiles: customPatternFiles,
-		timeZoneOffset:     timeZoneOffset,
-		schemaErr: &schemaErr{
-			number: 0,
-			last:   time.Now(),
-		},
+		name:                 name,
+		labels:               labels,
+		mode:                 mode,
+		Patterns:             patterns,
+		CustomPatterns:       customPatterns,
+		CustomPatternFiles:   customPatternFiles,
+		timeZoneOffset:       timeZoneOffset,
+		disableRecordErrData: disableRecordErrData,
 	}
 	err = p.compile()
 	if err != nil {
@@ -171,7 +168,10 @@ func (p *GrokParser) compile() error {
 	p.CustomPatterns = DEFAULT_PATTERNS + p.CustomPatterns
 	if len(p.CustomPatterns) != 0 {
 		scanner := bufio.NewScanner(strings.NewReader(p.CustomPatterns))
-		p.addCustomPatterns(scanner)
+		err := p.addCustomPatterns(scanner)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Parse any custom pattern files supplied.
@@ -182,7 +182,10 @@ func (p *GrokParser) compile() error {
 		}
 
 		scanner := bufio.NewScanner(bufio.NewReader(file))
-		p.addCustomPatterns(scanner)
+		err = p.addCustomPatterns(scanner)
+		if err != nil {
+			return err
+		}
 	}
 
 	return p.compileCustomPatterns()
@@ -192,15 +195,24 @@ func (gp *GrokParser) Name() string {
 	return gp.name
 }
 
-func (gp *GrokParser) Parse(lines []string) ([]sender.Data, error) {
-	datas := []sender.Data{}
+func (gp *GrokParser) Type() string {
+	return TypeGrok
+}
+
+func (gp *GrokParser) Parse(lines []string) ([]Data, error) {
+	datas := []Data{}
 	se := &utils.StatsError{}
 	for idx, line := range lines {
 		data, err := gp.parseLine(line)
 		if err != nil {
-			gp.schemaErr.Output(err)
 			se.AddErrors()
 			se.ErrorIndex = append(se.ErrorIndex, idx)
+			se.ErrorDetail = err
+			if !gp.disableRecordErrData {
+				errData := make(Data)
+				errData[KeyPandoraStash] = line
+				datas = append(datas, errData)
+			}
 			continue
 		}
 		if len(data) < 1 { //数据不为空的时候发送
@@ -213,7 +225,7 @@ func (gp *GrokParser) Parse(lines []string) ([]sender.Data, error) {
 	return datas, se
 }
 
-func (p *GrokParser) parseLine(line string) (sender.Data, error) {
+func (p *GrokParser) parseLine(line string) (Data, error) {
 	if p.mode == ModeMulti {
 		line = strings.Replace(line, "\n", " ", -1)
 	}
@@ -232,9 +244,9 @@ func (p *GrokParser) parseLine(line string) (sender.Data, error) {
 	}
 	if len(values) < 1 {
 		log.Errorf("%v no value was parsed after grok pattern %v", line, p.Patterns)
-		return nil, nil
+		return nil, fmt.Errorf("%v no value was parsed after grok pattern %v", line, p.Patterns)
 	}
-	data := sender.Data{}
+	data := Data{}
 	for k, v := range values {
 		if k == "" || v == "" {
 			continue
@@ -294,14 +306,19 @@ func (p *GrokParser) parseLine(line string) (sender.Data, error) {
 	return data, nil
 }
 
-func (p *GrokParser) addCustomPatterns(scanner *bufio.Scanner) {
+func (p *GrokParser) addCustomPatterns(scanner *bufio.Scanner) error {
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
+		line = trimInvalidSpace(line)
 		if len(line) > 0 && line[0] != '#' {
 			names := strings.SplitN(line, " ", 2)
+			if len(names) < 2 {
+				return fmt.Errorf("the pattern %v is invalid, and has been ignored", line)
+			}
 			p.patterns[names[0]] = names[1]
 		}
 	}
+	return nil
 }
 
 func (p *GrokParser) compileCustomPatterns() error {
@@ -333,6 +350,34 @@ func (p *GrokParser) compileCustomPatterns() error {
 	}
 
 	return p.g.AddPatternsFromMap(p.patterns)
+}
+
+func trimInvalidSpace(pattern string) string {
+	reg := regexp.MustCompile(`%{((.*?:)*?.*?)}`)
+	substringIndex := reg.FindAllStringSubmatchIndex(pattern, -1)
+	curIndex := 0
+	var clearString string = ""
+	for _, val := range substringIndex {
+		if curIndex < val[2] {
+			clearString += pattern[curIndex:val[2]]
+		}
+		subString := pattern[val[2]:val[3]]
+		subStringSlice := strings.Split(subString, ":")
+		subLen := len(subStringSlice)
+		for index, chr := range subStringSlice {
+			clearString += strings.TrimSpace(chr)
+			if index != subLen-1 {
+				clearString += ":"
+			} else {
+				clearString += "}"
+			}
+		}
+		curIndex = val[3] + 1
+	}
+	if curIndex < len(pattern) {
+		clearString += pattern[curIndex:]
+	}
+	return clearString
 }
 
 // parseTypedCaptures parses the capture modifiers, and then deletes the
