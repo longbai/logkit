@@ -12,4 +12,5 @@ import (
 	_ "github.com/qiniu/logkit/parser/qiniu"
 	_ "github.com/qiniu/logkit/parser/raw"
 	_ "github.com/qiniu/logkit/parser/syslog"
+	_ "github.com/qiniu/logkit/parser/vdnqos"
 )
