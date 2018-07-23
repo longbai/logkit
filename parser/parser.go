@@ -32,18 +32,20 @@ const (
 
 // parser 的类型
 const (
-	TypeCSV        = "csv"
-	TypeLogv1      = "qiniulog"
-	TypeKafkaRest  = "kafkarest"
-	TypeRaw        = "raw"
-	TypeEmpty      = "empty"
-	TypeGrok       = "grok"
-	TypeInnerSQL   = "_sql"
-	TypeInnerMySQL = "_mysql"
-	TypeJSON       = "json"
-	TypeNginx      = "nginx"
-	TypeSyslog     = "syslog"
-	TypeMySQL      = "mysqllog"
+	TypeKafkaQosStream = "kafka_qos_stream"
+	TypeKafkaQosPlay   = "kafka_qos_play"
+	TypeCSV            = "csv"
+	TypeLogv1          = "qiniulog"
+	TypeKafkaRest      = "kafkarest"
+	TypeRaw            = "raw"
+	TypeEmpty          = "empty"
+	TypeGrok           = "grok"
+	TypeInnerSQL       = "_sql"
+	TypeInnerMySQL     = "_mysql"
+	TypeJSON           = "json"
+	TypeNginx          = "nginx"
+	TypeSyslog         = "syslog"
+	TypeMySQL          = "mysqllog"
 )
 
 // 数据常量类型

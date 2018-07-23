@@ -84,8 +84,8 @@ const (
 	TypeElastic           = "elasticsearch" // elastic
 	TypeKafka             = "kafka"         // kafka
 	TypeHttp              = "http"          // http sender
-
-	InnerUserAgent = "_useragent"
+	TypeMultiPandora      = "multi_pandora" // multi pandora
+	InnerUserAgent        = "_useragent"
 )
 
 const (

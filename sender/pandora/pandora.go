@@ -590,7 +590,7 @@ func (s *Sender) UpdateSchemas() {
 			RepoName:     s.opt.repoName,
 			PandoraToken: s.opt.tokens.SchemaFreeTokens.PipelineGetRepoToken,
 		})
-	if err != nil && (!s.opt.schemaFree || !reqerr.IsNoSuchResourceError(err)) {
+	if err != nil /*&& (!s.opt.schemaFree || !reqerr.IsNoSuchResourceError(err))*/ {
 		log.Warnf("Runner[%v] Sender[%v]: update pandora repo <%v> schema error %v", s.opt.runnerName, s.opt.name, s.opt.repoName, err)
 		return
 	}
@@ -656,6 +656,8 @@ func convertDate(v interface{}, option forceMicrosecondOption) (d interface{}, e
 		s = int64(newv)
 	case int16:
 		s = int64(newv)
+	case time.Time:
+		s = newv.Unix()
 	case string:
 		t, err := times.StrToTime(newv)
 		if err != nil {
@@ -845,7 +847,25 @@ func (s *Sender) checkSchemaUpdate() {
 	s.UpdateSchemas()
 }
 
+func (s *Sender) filterData(data []Data) (export []Data) {
+	export = []Data{}
+	for _, v := range data {
+		if x, ok := v["domain"]; ok {
+			domain := x.(string)
+			if domain == s.Name() {
+				// fmt.Println("domain", domain, s.Name())
+				export = append(export, v)
+			}
+		}
+	}
+	return export
+}
+
 func (s *Sender) Send(datas []Data) (se error) {
+	datas = s.filterData(datas)
+	if len(datas) == 0 {
+		return
+	}
 	switch s.sendType {
 	case SendTypeRaw:
 		return s.rawSend(datas)
