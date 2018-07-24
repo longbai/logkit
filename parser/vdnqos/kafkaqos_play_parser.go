@@ -379,7 +379,7 @@ func (krp *KafkaQosPlayParser) Parse(lines []string) ([]models.Data, error) {
 			// fmt.Println(msg.Body)
 			continue
 		}
-		if msg.Topic == "qos_raw_play_v5" {
+		if msg.Topic == "qos_raw_play_v5" || msg.Topic == "qos_raw_misc_v5_vod"{
 			data := strings.Split(msg.Body, "\t")
 			if len(data) < 5 {
 				continue
