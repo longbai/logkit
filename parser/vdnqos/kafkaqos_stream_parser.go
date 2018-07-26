@@ -459,6 +459,8 @@ func NewKafkaQosStreamParser(c conf.MapConf) (parser.Parser, error) {
 		fmt.Println(err)
 		return nil, err
 	}
+	apmHost, _ := c.GetStringOr("apm_host", "")
+	publishDomain, _ := c.GetStringOr("stream_domain_retrieve_path", "")
 	domains, _ := c.GetStringOr("domains", "")
 	domains = strings.TrimSpace(domains)
 	domains2 := strings.Split(domains, ",")

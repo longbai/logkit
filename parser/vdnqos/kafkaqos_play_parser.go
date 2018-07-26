@@ -18,7 +18,9 @@ import (
 	"github.com/qiniu/logkit/utils/models"
 	"github.com/qiniu/logkit/parser"
 
-
+	"net/http"
+	"io/ioutil"
+	"github.com/json-iterator/go"
 )
 
 // const (
@@ -430,11 +432,26 @@ func NewKafkaQosPlayParser(c conf.MapConf) (parser.Parser, error) {
 		fmt.Println(err)
 		return nil, err
 	}
-	domains, _ := c.GetStringOr("domains", "")
-	domains = strings.TrimSpace(domains)
-	domains2 := strings.Split(domains, ",")
+	apmHost, _ := c.GetStringOr("apm_host", "")
+	playDomain, _ := c.GetStringOr("play_domain_retrieve_path", "")
+	resp, err := http.Get(fmt.Sprintln(apmHost, playDomain))
+	if err != nil {
+		fmt.Println(err)
+		return nil, err
+	}
+	bytes, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Println(err)
+		return nil, err
+	}
+	var domains []string
+	err = jsoniter.Unmarshal(bytes, &domains)
+	if err != nil {
+		fmt.Println(err)
+		return nil, err
+	}
 	return &KafkaQosPlayParser{
 		name:    name,
-		domains: domains2,
+		domains: domains,
 	}, nil
 }
