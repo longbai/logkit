@@ -139,7 +139,26 @@ func (ft *FtSender) Name() string {
 	return ft.innerSender.Name()
 }
 
+func (s *FtSender) filterData(data []Data) (export []Data) {
+	export = []Data{}
+	for _, v := range data {
+		if x, ok := v["domain"]; ok {
+			domain := x.(string)
+			if domain == s.Name() {
+				// fmt.Println("domain", domain, s.Name())
+				export = append(export, v)
+			}
+		}
+	}
+	return export
+}
+
+
 func (ft *FtSender) Send(datas []Data) error {
+	datas = ft.filterData(datas)
+	if len(datas) == 0 {
+		return nil
+	}
 
 	switch ft.opt.innerSenderType {
 	case TypePandora:
