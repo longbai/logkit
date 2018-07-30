@@ -433,8 +433,8 @@ func NewKafkaQosPlayParser(c conf.MapConf) (parser.Parser, error) {
 		return nil, err
 	}
 	apmHost, _ := c.GetStringOr("apm_host", "")
-	playDomain, _ := c.GetStringOr("play_domain_retrieve_path", "")
-	resp, err := http.Get(fmt.Sprintln(apmHost, playDomain))
+	playDomainRetrievePath, _ := c.GetStringOr("play_domain_retrieve_path", "")
+	resp, err := http.Get(fmt.Sprintln(apmHost, playDomainRetrievePath))
 	if err != nil {
 		fmt.Println(err)
 		return nil, err
