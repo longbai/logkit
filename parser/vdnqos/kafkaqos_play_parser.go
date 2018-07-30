@@ -15,13 +15,13 @@ import (
 
 	"github.com/wangtuanjie/ip17mon"
 
-	"github.com/qiniu/logkit/utils/models"
 	"github.com/qiniu/logkit/parser"
+	"github.com/qiniu/logkit/utils/models"
 
-	"net/http"
-	"io/ioutil"
 	"github.com/json-iterator/go"
 	"github.com/qiniu/log"
+	"io/ioutil"
+	"net/http"
 )
 
 // const (
@@ -41,11 +41,10 @@ func init() {
 	parser.RegisterConstructor(parser.TypeKafkaQosPlay, NewKafkaQosPlayParser)
 }
 
-
 type KafkaQosPlayParser struct {
-	name    string
-	domains []string
-	apmHost string
+	name                   string
+	domains                []string
+	apmHost                string
 	playDomainRetrievePath string
 }
 
@@ -53,7 +52,7 @@ func (k *KafkaQosPlayParser) Name() string {
 	return k.name
 }
 
-func (k *KafkaQosPlayParser)RefreshDomains() {
+func (k *KafkaQosPlayParser) RefreshDomains() {
 	ticker := time.NewTicker(time.Minute * 5)
 	go func() {
 		for range ticker.C {
@@ -116,7 +115,6 @@ type PlayEvent struct {
 
 	ErrorCode   int64 // 业务错误代码
 	ErrorOscode int64 // 系统错误代码
-
 }
 
 //222.188.168.212	play.v5	1504250399319	1503281015004993	1.1.0.32	rtmp	pull.lespark.cn	live/57762d4b245bfa685f92af03	-	61.160.199.165	1504250339036	1504250399319	0	14.35	0	47.00	0	13.34	37.22	3342	3968	97199	351830
@@ -397,7 +395,7 @@ func (krp *KafkaQosPlayParser) Parse(lines []string) ([]models.Data, error) {
 			// fmt.Println(msg.Body)
 			continue
 		}
-		if msg.Topic == "qos_raw_play_v5" || msg.Topic == "qos_raw_misc_v5_vod"{
+		if msg.Topic == "qos_raw_play_v5" || msg.Topic == "qos_raw_misc_v5_vod" {
 			data := strings.Split(msg.Body, "\t")
 			if len(data) < 5 {
 				continue
@@ -429,7 +427,8 @@ func (krp *KafkaQosPlayParser) Parse(lines []string) ([]models.Data, error) {
 			} else {
 				continue
 			}
-			for _, v := range krp.domains {
+			domains := krp.domains
+			for _, v := range domains {
 				if v == e.Domain {
 					// fmt.Println("parse domain", v, e.Domain)
 					datas = append(datas, dt)
@@ -455,9 +454,9 @@ func NewKafkaQosPlayParser(c conf.MapConf) (parser.Parser, error) {
 		return nil, err
 	}
 	kafkaQosPlayParser := &KafkaQosPlayParser{
-		name:    name,
-		domains: domains,
-		apmHost: apmHost,
+		name:                   name,
+		domains:                domains,
+		apmHost:                apmHost,
 		playDomainRetrievePath: playDomainRetrievePath,
 	}
 	kafkaQosPlayParser.RefreshDomains()
@@ -465,7 +464,7 @@ func NewKafkaQosPlayParser(c conf.MapConf) (parser.Parser, error) {
 }
 
 func getDomains(apmHost, path string) ([]string, error) {
-	resp, err := http.Get(fmt.Sprintln(apmHost, path))
+	resp, err := http.Get(apmHost + path)
 	if err != nil {
 		return nil, err
 	}
