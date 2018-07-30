@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"io/ioutil"
 	"github.com/json-iterator/go"
+	"github.com/qiniu/log"
 )
 
 // const (
@@ -37,12 +38,27 @@ func init() {
 }
 
 type KafkaQosStreamParser struct {
-	name    string
-	domains []string
+	name                     string
+	domains                  []string
+	apmHost                  string
+	streamDomainRetrievePath string
 }
 
 func (k *KafkaQosStreamParser) Name() string {
 	return k.name
+}
+
+func (k *KafkaQosStreamParser)RefreshDomains() {
+	ticker := time.NewTicker(time.Minute * 5)
+	go func() {
+		for range ticker.C {
+			domains, err := getDomains(k.apmHost, k.streamDomainRetrievePath)
+			if err != nil {
+				log.Error(err)
+			}
+			k.domains = domains
+		}
+	}()
 }
 
 type Message struct {
@@ -480,8 +496,12 @@ func NewKafkaQosStreamParser(c conf.MapConf) (parser.Parser, error) {
 		fmt.Println(err)
 		return nil, err
 	}
-	return &KafkaQosStreamParser{
-		name:    name,
-		domains: domains,
-	}, nil
+	kafkaQosStreamParser := &KafkaQosStreamParser{
+		name:                     name,
+		domains:                  domains,
+		apmHost:                  apmHost,
+		streamDomainRetrievePath: streamDomainRetrievePath,
+	}
+	kafkaQosStreamParser.RefreshDomains()
+	return kafkaQosStreamParser, nil
 }

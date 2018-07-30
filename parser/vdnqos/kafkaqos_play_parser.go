@@ -56,7 +56,7 @@ func (k *KafkaQosPlayParser) Name() string {
 func (k *KafkaQosPlayParser)RefreshDomains() {
 	ticker := time.NewTicker(time.Minute * 5)
 	go func() {
-		for _ := range ticker.C {
+		for range ticker.C {
 			domains, err := getDomains(k.apmHost, k.playDomainRetrievePath)
 			if err != nil {
 				log.Error(err)
@@ -464,8 +464,8 @@ func NewKafkaQosPlayParser(c conf.MapConf) (parser.Parser, error) {
 	return kafkaQosPlayParser, nil
 }
 
-func getDomains(apmHost, playDomainRetrievePath string) ([]string, error) {
-	resp, err := http.Get(fmt.Sprintln(apmHost, playDomainRetrievePath))
+func getDomains(apmHost, path string) ([]string, error) {
+	resp, err := http.Get(fmt.Sprintln(apmHost, path))
 	if err != nil {
 		return nil, err
 	}
@@ -478,4 +478,5 @@ func getDomains(apmHost, playDomainRetrievePath string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	return domains, nil
 }
