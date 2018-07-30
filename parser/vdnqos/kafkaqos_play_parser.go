@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"io/ioutil"
 	"github.com/json-iterator/go"
+	"github.com/qiniu/log"
 )
 
 // const (
@@ -44,10 +45,25 @@ func init() {
 type KafkaQosPlayParser struct {
 	name    string
 	domains []string
+	apmHost string
+	playDomainRetrievePath string
 }
 
 func (k *KafkaQosPlayParser) Name() string {
 	return k.name
+}
+
+func (k *KafkaQosPlayParser)RefreshDomains() {
+	ticker := time.NewTicker(time.Minute * 5)
+	go func() {
+		for _ := range ticker.C {
+			domains, err := getDomains(k.apmHost, k.playDomainRetrievePath)
+			if err != nil {
+				log.Error(err)
+			}
+			k.domains = domains
+		}
+	}()
 }
 
 type PlayEvent struct {
@@ -434,24 +450,32 @@ func NewKafkaQosPlayParser(c conf.MapConf) (parser.Parser, error) {
 	}
 	apmHost, _ := c.GetStringOr("apm_host", "")
 	playDomainRetrievePath, _ := c.GetStringOr("play_domain_retrieve_path", "")
+	domains, err := getDomains(apmHost, playDomainRetrievePath)
+	if err != nil {
+		return nil, err
+	}
+	kafkaQosPlayParser := &KafkaQosPlayParser{
+		name:    name,
+		domains: domains,
+		apmHost: apmHost,
+		playDomainRetrievePath: playDomainRetrievePath,
+	}
+	kafkaQosPlayParser.RefreshDomains()
+	return kafkaQosPlayParser, nil
+}
+
+func getDomains(apmHost, playDomainRetrievePath string) ([]string, error) {
 	resp, err := http.Get(fmt.Sprintln(apmHost, playDomainRetrievePath))
 	if err != nil {
-		fmt.Println(err)
 		return nil, err
 	}
 	bytes, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		fmt.Println(err)
 		return nil, err
 	}
 	var domains []string
 	err = jsoniter.Unmarshal(bytes, &domains)
 	if err != nil {
-		fmt.Println(err)
 		return nil, err
 	}
-	return &KafkaQosPlayParser{
-		name:    name,
-		domains: domains,
-	}, nil
 }

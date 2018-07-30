@@ -376,8 +376,8 @@ func streamEndEventToSenderData(e *StreamEvent) models.Data {
 	d["region"] = e.Region
 	d["isp"] = e.Isp
 
-	d["begin"] = e.BeginAt
-	d["end"] = e.EndAt
+	d["begin"] = e.BeginAt.Format(time.RFC3339)
+	d["end"] = e.EndAt.Format(time.RFC3339)
 	d["gop_time"] = e.GopTime
 	d["video_buf_sent_frames"] = e.VideoBufferSentFrames
 	d["video_buf_dropped_frames"] = e.VideoBufferDroppedFrames
