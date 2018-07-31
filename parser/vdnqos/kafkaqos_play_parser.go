@@ -61,7 +61,7 @@ func (k *KafkaQosPlayParser) RefreshDomains() {
 				log.Error(err)
 			}
 			k.domains = domains
-			log.Info("successfully updated play domains to %v", domains)
+			log.Infof("successfully updated play domains to %v", domains)
 		}
 	}()
 }
@@ -460,7 +460,7 @@ func NewKafkaQosPlayParser(c conf.MapConf) (parser.Parser, error) {
 		apmHost:                apmHost,
 		playDomainRetrievePath: playDomainRetrievePath,
 	}
-	log.Info("successfully set play domains to %v", domains)
+	log.Infof("successfully set play domains to %v", domains)
 	kafkaQosPlayParser.RefreshDomains()
 	return kafkaQosPlayParser, nil
 }
