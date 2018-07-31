@@ -480,7 +480,7 @@ func NewKafkaQosStreamParser(c conf.MapConf) (parser.Parser, error) {
 	}
 	apmHost, _ := c.GetStringOr("apm_host", "")
 	streamDomainRetrievePath, _ := c.GetStringOr("stream_domain_retrieve_path", "")
-	resp, err := http.Get(fmt.Sprintln(apmHost, streamDomainRetrievePath))
+	resp, err := http.Get(apmHost + streamDomainRetrievePath)
 	if err != nil {
 		fmt.Println(err)
 		return nil, err
