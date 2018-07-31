@@ -196,7 +196,7 @@ func (ft *FtSender) Send(datas []Data) error {
 		}
 	} else {
 		err := ft.saveToFile(datas)
-		if err != nil {
+		if err != nil && err.Error() != "Time.MarshalJSON: year outside of range [0,9999]"{
 			se.FtNotRetry = false
 			se.ErrorDetail = err
 			ft.statsMutex.Lock()

@@ -140,7 +140,14 @@ type StreamEvent struct {
 // 106.9.76.231    stream_end.v5   1501764599305   319D7887-631E-4BF5-BD11-8316CAF91679    git-2017-04-28-09109eb1 rtmp    114.55.127.136  /megatest/p58954021501764595    mega1501764595  114.55.127.136  1501764596556   1501764599309   3000    22      0       116     0       11385   0       iPhone 6        ios     10.3.2  sdbean.MegaWerewolf     2.4.2   0       0.00    0       0.00    streamingkit-git-2017-04-28-09109eb1;librtmp-10004      47      LTE     10.76.231.21    222.222.222.222 -       中国电信              0       6       0       0       0       -       0       0
 func buildTime(s string) time.Time {
 	t, _ := strconv.ParseInt(s, 10, 64)
-	return time.Unix(t/1000, t*1000000%1000000000)
+	if t < 0 {
+		t = 0
+	}
+	temp := time.Unix(t/1000, t*1000000%1000000000)
+	if temp.Year() > 9999 {
+		temp = time.Now()
+	}
+	return temp
 }
 
 func (krp *KafkaQosStreamParser) parseStreamStartEvent(data []string) (e *StreamEvent, err error) {
