@@ -12,12 +12,12 @@ import (
 
 	"github.com/wangtuanjie/ip17mon"
 
-	"github.com/qiniu/logkit/utils/models"
-	"github.com/qiniu/logkit/parser"
-	"net/http"
-	"io/ioutil"
 	"github.com/json-iterator/go"
 	"github.com/qiniu/log"
+	"github.com/qiniu/logkit/parser"
+	"github.com/qiniu/logkit/utils/models"
+	"io/ioutil"
+	"net/http"
 )
 
 // const (
@@ -48,7 +48,7 @@ func (k *KafkaQosStreamParser) Name() string {
 	return k.name
 }
 
-func (k *KafkaQosStreamParser)RefreshDomains() {
+func (k *KafkaQosStreamParser) RefreshDomains() {
 	ticker := time.NewTicker(time.Minute * 5)
 	go func() {
 		for range ticker.C {
@@ -57,6 +57,7 @@ func (k *KafkaQosStreamParser)RefreshDomains() {
 				log.Error(err)
 			}
 			k.domains = domains
+			log.Info("successfully updated play domains to %v", domains)
 		}
 	}()
 }
@@ -418,7 +419,6 @@ func streamEndEventToSenderData(e *StreamEvent) models.Data {
 	return d
 }
 
-
 func (krp *KafkaQosStreamParser) Parse(lines []string) ([]models.Data, error) {
 	datas := []models.Data{}
 	for _, line := range lines {
@@ -502,6 +502,7 @@ func NewKafkaQosStreamParser(c conf.MapConf) (parser.Parser, error) {
 		apmHost:                  apmHost,
 		streamDomainRetrievePath: streamDomainRetrievePath,
 	}
+	log.Info("successfully set publish domains to %v", domains)
 	kafkaQosStreamParser.RefreshDomains()
 	return kafkaQosStreamParser, nil
 }
