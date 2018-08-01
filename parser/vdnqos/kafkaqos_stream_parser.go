@@ -12,8 +12,12 @@ import (
 
 	"github.com/wangtuanjie/ip17mon"
 
-	"github.com/qiniu/logkit/utils/models"
+	"github.com/json-iterator/go"
+	"github.com/qiniu/log"
 	"github.com/qiniu/logkit/parser"
+	"github.com/qiniu/logkit/utils/models"
+	"io/ioutil"
+	"net/http"
 )
 
 // const (
@@ -34,12 +38,28 @@ func init() {
 }
 
 type KafkaQosStreamParser struct {
-	name    string
-	domains []string
+	name                     string
+	domains                  []string
+	apmHost                  string
+	streamDomainRetrievePath string
 }
 
 func (k *KafkaQosStreamParser) Name() string {
 	return k.name
+}
+
+func (k *KafkaQosStreamParser) RefreshDomains() {
+	ticker := time.NewTicker(time.Minute * 5)
+	go func() {
+		for range ticker.C {
+			domains, err := getDomains(k.apmHost, k.streamDomainRetrievePath)
+			if err != nil {
+				log.Error(err)
+			}
+			k.domains = domains
+			log.Infof("successfully updated play domains to %v", domains)
+		}
+	}()
 }
 
 type Message struct {
@@ -380,8 +400,8 @@ func streamEndEventToSenderData(e *StreamEvent) models.Data {
 	d["region"] = e.Region
 	d["isp"] = e.Isp
 
-	d["begin"] = e.BeginAt
-	d["end"] = e.EndAt
+	d["begin"] = e.BeginAt.Format(time.RFC3339)
+	d["end"] = e.EndAt.Format(time.RFC3339)
 	d["gop_time"] = e.GopTime
 	d["video_buf_sent_frames"] = e.VideoBufferSentFrames
 	d["video_buf_dropped_frames"] = e.VideoBufferDroppedFrames
@@ -405,7 +425,6 @@ func streamEndEventToSenderData(e *StreamEvent) models.Data {
 
 	return d
 }
-
 
 func (krp *KafkaQosStreamParser) Parse(lines []string) ([]models.Data, error) {
 	datas := []models.Data{}
@@ -466,11 +485,31 @@ func NewKafkaQosStreamParser(c conf.MapConf) (parser.Parser, error) {
 		fmt.Println(err)
 		return nil, err
 	}
-	domains, _ := c.GetStringOr("domains", "")
-	domains = strings.TrimSpace(domains)
-	domains2 := strings.Split(domains, ",")
-	return &KafkaQosStreamParser{
-		name:    name,
-		domains: domains2,
-	}, nil
+	apmHost, _ := c.GetStringOr("apm_host", "")
+	streamDomainRetrievePath, _ := c.GetStringOr("stream_domain_retrieve_path", "")
+	resp, err := http.Get(apmHost + streamDomainRetrievePath)
+	if err != nil {
+		fmt.Println(err)
+		return nil, err
+	}
+	bytes, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Println(err)
+		return nil, err
+	}
+	var domains []string
+	err = jsoniter.Unmarshal(bytes, &domains)
+	if err != nil {
+		fmt.Println(err)
+		return nil, err
+	}
+	kafkaQosStreamParser := &KafkaQosStreamParser{
+		name:                     name,
+		domains:                  domains,
+		apmHost:                  apmHost,
+		streamDomainRetrievePath: streamDomainRetrievePath,
+	}
+	log.Infof("successfully set publish domains to %v", domains)
+	kafkaQosStreamParser.RefreshDomains()
+	return kafkaQosStreamParser, nil
 }
