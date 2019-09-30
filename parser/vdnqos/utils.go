@@ -1,10 +1,13 @@
 package vdnqos
 
 import (
-	"fmt"
-	"strconv"
-	goavro "gopkg.in/linkedin/goavro.v1"
 	"bytes"
+	"fmt"
+	jsoniter "github.com/json-iterator/go"
+	"gopkg.in/linkedin/goavro.v1"
+	"io/ioutil"
+	"net/http"
+	"strconv"
 )
 
 func decodeMessage(message []byte) (*Message, error) {
@@ -58,4 +61,25 @@ func decodeMessage(message []byte) (*Message, error) {
 	// Body assign
 	msg.Body = fmt.Sprintf("%s", body)
 	return msg, nil
+}
+
+func getDomains(apmHost, path string) (map[string]bool, error) {
+	resp, err := http.Get(apmHost + path)
+	if err != nil {
+		return nil, err
+	}
+	bytes, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	var domains []string
+	err = jsoniter.Unmarshal(bytes, &domains)
+	if err != nil {
+		return nil, err
+	}
+	d := map[string]bool{}
+	for _, v := range domains {
+		d[v] = true
+	}
+	return d, nil
 }

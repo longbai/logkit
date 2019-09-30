@@ -136,30 +136,10 @@ func newFtSender(innerSender Sender, runnerName string, opt *FtOption) (*FtSende
 }
 
 func (ft *FtSender) Name() string {
-	return ft.innerSender.Name()
+	return "ft_" + ft.innerSender.Name()
 }
-
-func (s *FtSender) filterData(data []Data) (export []Data) {
-	export = []Data{}
-	for _, v := range data {
-		if x, ok := v["domain"]; ok {
-			domain := x.(string)
-			if domain == s.Name() {
-				// fmt.Println("domain", domain, s.Name())
-				export = append(export, v)
-			}
-		}
-	}
-	return export
-}
-
 
 func (ft *FtSender) Send(datas []Data) error {
-	datas = ft.filterData(datas)
-	if len(datas) == 0 {
-		return nil
-	}
-
 	switch ft.opt.innerSenderType {
 	case TypePandora:
 		for i, v := range datas {
@@ -351,6 +331,7 @@ func (ft *FtSender) trySendDatas(datas []Data, failSleep int, isRetry bool) (bac
 		ft.stats.LastError = ""
 	}
 	ft.statsMutex.Unlock()
+	log.Debug("ft send", ft.runnerName, err, len(datas))
 	if err != nil {
 		retDatasContext := ft.handleSendError(err, datas)
 		for _, v := range retDatasContext {

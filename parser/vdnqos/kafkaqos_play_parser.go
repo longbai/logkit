@@ -1,27 +1,16 @@
 package vdnqos
 
 import (
-	// "bytes"
 	"fmt"
+	"github.com/qiniu/log"
+	"github.com/wangtuanjie/ip17mon"
 	"strconv"
 	"strings"
 	"time"
 
-	// "github.com/linkedin/goavro"
-	// "github.com/qiniu/log"
 	"github.com/qiniu/logkit/conf"
-	// "github.com/qiniu/logkit/sender"
-	// "github.com/qiniu/logkit/times"
-
-	"github.com/wangtuanjie/ip17mon"
-
 	"github.com/qiniu/logkit/parser"
 	"github.com/qiniu/logkit/utils/models"
-
-	"github.com/json-iterator/go"
-	"github.com/qiniu/log"
-	"io/ioutil"
-	"net/http"
 )
 
 // const (
@@ -43,7 +32,7 @@ func init() {
 
 type KafkaQosPlayParser struct {
 	name                   string
-	domains                []string
+	domains                map[string]bool
 	apmHost                string
 	playDomainRetrievePath string
 }
@@ -61,7 +50,7 @@ func (k *KafkaQosPlayParser) RefreshDomains() {
 				log.Error(err)
 			}
 			k.domains = domains
-			log.Infof("successfully updated play domains to %v", domains)
+			log.Infof("%s successfully updated play domains to %v", k.name, domains)
 		}
 	}()
 }
@@ -393,7 +382,6 @@ func (krp *KafkaQosPlayParser) Parse(lines []string) ([]models.Data, error) {
 	for _, line := range lines {
 		msg, err := decodeMessage([]byte(line))
 		if msg == nil || err != nil {
-			// fmt.Println(msg.Body)
 			continue
 		}
 		if msg.Topic == "qos_raw_play_v5" || msg.Topic == "qos_raw_misc_v5_vod" {
@@ -428,12 +416,9 @@ func (krp *KafkaQosPlayParser) Parse(lines []string) ([]models.Data, error) {
 			} else {
 				continue
 			}
-			domains := krp.domains
-			for _, v := range domains {
-				if v == e.Domain {
-					// fmt.Println("parse domain", v, e.Domain)
-					datas = append(datas, dt)
-				}
+			if _, ok := krp.domains[e.Domain]; ok {
+				datas = append(datas, dt)
+				//log.Debug("domain add", e.Domain)
 			}
 		}
 	}
@@ -445,13 +430,14 @@ func NewKafkaQosPlayParser(c conf.MapConf) (parser.Parser, error) {
 	ipDb, _ := c.GetStringOr("ipdb", "")
 	err := ip17mon.Init(ipDb)
 	if err != nil {
-		fmt.Println(err)
+		log.Warn(err)
 		return nil, err
 	}
 	apmHost, _ := c.GetStringOr("apm_host", "")
 	playDomainRetrievePath, _ := c.GetStringOr("play_domain_retrieve_path", "")
 	domains, err := getDomains(apmHost, playDomainRetrievePath)
 	if err != nil {
+		log.Warn(err)
 		return nil, err
 	}
 	kafkaQosPlayParser := &KafkaQosPlayParser{
@@ -460,24 +446,7 @@ func NewKafkaQosPlayParser(c conf.MapConf) (parser.Parser, error) {
 		apmHost:                apmHost,
 		playDomainRetrievePath: playDomainRetrievePath,
 	}
-	log.Infof("successfully set play domains to %v", domains)
+	log.Debugf("%s successfully set play domains to %v", name, domains)
 	kafkaQosPlayParser.RefreshDomains()
 	return kafkaQosPlayParser, nil
-}
-
-func getDomains(apmHost, path string) ([]string, error) {
-	resp, err := http.Get(apmHost + path)
-	if err != nil {
-		return nil, err
-	}
-	bytes, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	var domains []string
-	err = jsoniter.Unmarshal(bytes, &domains)
-	if err != nil {
-		return nil, err
-	}
-	return domains, nil
 }

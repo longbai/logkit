@@ -2,22 +2,15 @@ package vdnqos
 
 import (
 	"fmt"
+	"github.com/qiniu/log"
+	"github.com/wangtuanjie/ip17mon"
 	"strconv"
 	"strings"
 	"time"
 
-	// "github.com/qiniu/log"
 	"github.com/qiniu/logkit/conf"
-	// "github.com/qiniu/logkit/times"
-
-	"github.com/wangtuanjie/ip17mon"
-
-	"github.com/json-iterator/go"
-	"github.com/qiniu/log"
 	"github.com/qiniu/logkit/parser"
 	"github.com/qiniu/logkit/utils/models"
-	"io/ioutil"
-	"net/http"
 )
 
 // const (
@@ -39,7 +32,7 @@ func init() {
 
 type KafkaQosStreamParser struct {
 	name                     string
-	domains                  []string
+	domains                  map[string]bool
 	apmHost                  string
 	streamDomainRetrievePath string
 }
@@ -57,7 +50,7 @@ func (k *KafkaQosStreamParser) RefreshDomains() {
 				log.Error(err)
 			}
 			k.domains = domains
-			log.Infof("successfully updated play domains to %v", domains)
+			log.Debugf("%s successfully updated play domains to %v", k.Name(), domains)
 		}
 	}()
 }
@@ -431,7 +424,6 @@ func (krp *KafkaQosStreamParser) Parse(lines []string) ([]models.Data, error) {
 	for _, line := range lines {
 		msg, err := decodeMessage([]byte(line))
 		if msg == nil || err != nil {
-			// fmt.Println(msg.Body)
 			continue
 		}
 		if msg.Topic == "qos_raw_stream_v5" {
@@ -466,12 +458,12 @@ func (krp *KafkaQosStreamParser) Parse(lines []string) ([]models.Data, error) {
 			} else {
 				continue
 			}
-			for _, v := range krp.domains {
-				if v == e.Domain {
-					// fmt.Println("parse domain", v, e.Domain)
-					datas = append(datas, dt)
-				}
+
+			if _, ok := krp.domains[e.Domain]; ok {
+				datas = append(datas, dt)
+				log.Debug("domain add", e.Domain)
 			}
+			log.Debug("domain", e.Domain, len(e.Domain), e.Domain, e.Path, len(datas))
 		}
 	}
 	return datas, nil
@@ -482,34 +474,23 @@ func NewKafkaQosStreamParser(c conf.MapConf) (parser.Parser, error) {
 	ipDb, _ := c.GetStringOr("ipdb", "")
 	err := ip17mon.Init(ipDb)
 	if err != nil {
-		fmt.Println(err)
+		log.Warn(err)
 		return nil, err
 	}
 	apmHost, _ := c.GetStringOr("apm_host", "")
 	streamDomainRetrievePath, _ := c.GetStringOr("stream_domain_retrieve_path", "")
-	resp, err := http.Get(apmHost + streamDomainRetrievePath)
+	domains, err := getDomains(apmHost, streamDomainRetrievePath)
 	if err != nil {
-		fmt.Println(err)
-		return nil, err
+		log.Error(err)
 	}
-	bytes, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		fmt.Println(err)
-		return nil, err
-	}
-	var domains []string
-	err = jsoniter.Unmarshal(bytes, &domains)
-	if err != nil {
-		fmt.Println(err)
-		return nil, err
-	}
+
 	kafkaQosStreamParser := &KafkaQosStreamParser{
 		name:                     name,
 		domains:                  domains,
 		apmHost:                  apmHost,
 		streamDomainRetrievePath: streamDomainRetrievePath,
 	}
-	log.Infof("successfully set publish domains to %v", domains)
+	log.Debugf("%s successfully set publish domains to %v", name, domains)
 	kafkaQosStreamParser.RefreshDomains()
 	return kafkaQosStreamParser, nil
 }
