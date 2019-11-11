@@ -271,6 +271,87 @@ func (krp *KafkaQosPlayParser) parsePlayEndEvent(data []string) (e *PlayEvent, e
 	return &event, nil
 }
 
+func (krp *KafkaQosPlayParser) parsePlayStartOpenEvent(data []string) (e *PlayEvent, err error) {
+	if data == nil || len(data) < 15 {
+		return nil, fmt.Errorf("not enough data")
+	}
+	if data[1] != "play_start_op.v5" {
+		return nil, fmt.Errorf("not stream")
+	}
+	event := PlayEvent{}
+	event.ClientIp = data[0]
+	event.Data = data
+	event.Tag = data[1]
+	event.ClientTime = buildTime(data[2])
+	event.Device = data[3]
+	event.Protocol = data[5]
+	event.Domain = data[6]
+	event.Path = data[7]
+	event.ReqID = data[8]
+	event.RemoteIP = data[9]
+	event.DeviceModel = data[10]
+	event.OS = data[11]
+	event.OsVersion = data[12]
+	event.AppName = data[13]
+	event.AppVersion = data[14]
+
+	info, err := ip17mon.Find(event.ClientIp)
+	if err != nil {
+		return nil, fmt.Errorf("invalid ip")
+	}
+	event.Country = info.Country
+	event.City = info.City
+	event.Region = info.Region
+	event.Isp = info.Isp
+	return &event, nil
+}
+
+func (krp *KafkaQosPlayParser) parsePlayEndOpenEvent(data []string) (e *PlayEvent, err error) {
+	if data == nil || len(data) < 27 {
+		return nil, fmt.Errorf("not enough data")
+	}
+	if data[1] != "play_end_op.v5" {
+		return nil, fmt.Errorf("not stream")
+	}
+	event := PlayEvent{}
+	event.ClientIp = data[0]
+	event.Data = data
+	event.Tag = data[1]
+	event.ClientTime = buildTime(data[2])
+	event.Device = data[3]
+	event.Protocol = data[5]
+	event.Domain = data[6]
+	event.Path = data[7]
+	event.ReqID = data[8]
+	event.RemoteIP = data[9]
+	event.DeviceModel = data[10]
+	event.OS = data[11]
+	event.OsVersion = data[12]
+	event.AppName = data[13]
+	event.AppVersion = data[14]
+
+	event.VideoDecodeType = data[17]
+	event.AudioDecodeType = data[18]
+	event.FirstVideoTime, _ = strconv.ParseInt(data[19], 10, 64)
+
+	event.VideoRenderFps, _ = strconv.ParseInt(data[21], 10, 64)
+	event.AudioRenderFps, _ = strconv.ParseInt(data[22], 10, 64)
+	event.AudioBitrate, _ = strconv.ParseInt(data[23], 10, 64)
+	event.VideoBitrate, _ = strconv.ParseInt(data[24], 10, 64)
+	event.ErrorCode, _ = strconv.ParseInt(data[25], 10, 64)
+	event.ErrorOscode, _ = strconv.ParseInt(data[26], 10, 64)
+
+	info, err := ip17mon.Find(event.ClientIp)
+	if err != nil {
+		return nil, fmt.Errorf("invalid ip")
+	}
+	event.Country = info.Country
+	event.City = info.City
+	event.Region = info.Region
+	event.Isp = info.Isp
+	return &event, nil
+}
+
 func playEventToSenderData(e *PlayEvent) models.Data {
 	d := models.Data{}
 	d["client_ip"] = e.ClientIp
