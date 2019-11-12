@@ -143,7 +143,7 @@ func ParsePlayEventData(data []string) (e *PlayEvent, err error) {
 
 	if strings.Contains(event.Device, "-") {
 		event.OS = "iOS"
-	} else {
+	} else if IsAndroidDevice(event.Device) {
 		event.OS = "Android"
 	}
 	return &event, nil;
@@ -182,7 +182,7 @@ func ParsePlayStartEventData(data []string) (e *PlayEvent, err error) {
 
 	if strings.Contains(event.Device, "-") {
 		event.OS = "iOS"
-	} else {
+	} else if IsAndroidDevice(event.Device) {
 		event.OS = "Android"
 	}
 	return &event, nil
@@ -285,7 +285,6 @@ func ParsePlayEndOpenEventData(data []string) (e *PlayEvent, err error) {
 
 	event.VideoDecodeType = data[17]
 	event.AudioDecodeType = data[18]
-	event.FirstVideoTime, _ = strconv.ParseInt(data[19], 10, 64)
 
 	event.VideoSourceFps, _ = strconv.ParseInt(data[21], 10, 64)
 	event.AudioSourceFps, _ = strconv.ParseInt(data[22], 10, 64)
@@ -487,6 +486,62 @@ func playEndEventToSenderData(e *PlayEvent) models.Data {
 	return d
 }
 
+func playStartOpenToSenderData(e *PlayEvent) models.Data {
+	d := models.Data{}
+	d["client_ip"] = e.ClientIp
+	d["tag"] = e.Tag
+	d["client_time"] = e.ClientTime.Format(time.RFC3339)
+	d["server_time"] = time.Unix(e.TimeStamp/1000, 0).Format(time.RFC3339)
+	d["device"] = e.Device
+	d["protocol"] = e.Protocol
+	d["domain"] = e.Domain
+	d["path"] = e.Path
+	d["reqid"] = e.ReqID
+	d["remote_ip"] = e.RemoteIP
+	d["os"] = e.OS
+	d["country"] = e.Country
+	d["city"] = e.City
+	d["region"] = e.Region
+	d["isp"] = e.Isp
+	d["device_model"] = e.DeviceModel
+	d["os_version"] = e.OsVersion
+	d["app_name"] = e.AppName
+	d["app_version"] = e.AppVersion
+
+	return d
+}
+
+func playEndOpenToSenderData(e *PlayEvent) models.Data {
+	d := models.Data{}
+	d["client_ip"] = e.ClientIp
+	d["tag"] = e.Tag
+	d["client_time"] = e.ClientTime.Format(time.RFC3339)
+	d["server_time"] = time.Unix(e.TimeStamp/1000, 0).Format(time.RFC3339)
+	d["device"] = e.Device
+	d["protocol"] = e.Protocol
+	d["domain"] = e.Domain
+	d["path"] = e.Path
+	d["reqid"] = e.ReqID
+	d["remote_ip"] = e.RemoteIP
+	d["os"] = e.OS
+	d["country"] = e.Country
+	d["city"] = e.City
+	d["region"] = e.Region
+	d["isp"] = e.Isp
+
+	d["video_decode_type"] = e.VideoDecodeType
+	d["audio_decode_type"] = e.AudioDecodeType
+	d["video_src_fps"] = e.VideoSourceFps
+	d["audio_src_fps"] = e.AudioSourceFps
+	d["audio_bitrate"] = e.AudioBitrate
+	d["video_bitrate"] = e.VideoBitrate
+
+	d["err_code"] = e.ErrorCode
+	d["err_os_code"] = e.ErrorOscode
+
+	return d
+}
+
 func (krp *KafkaQosPlayParser) Parse(lines []string) ([]models.Data, error) {
 	datas := []models.Data{}
 	for _, line := range lines {
@@ -523,6 +578,20 @@ func (krp *KafkaQosPlayParser) Parse(lines []string) ([]models.Data, error) {
 				}
 				e.TimeStamp = msg.Timestamp
 				dt = playEndEventToSenderData(e)
+			} else if data[1] == "play_start_op.v5" {
+				e, err := krp.parsePlayStartEvent(data)
+				if err != nil || e == nil {
+					continue
+				}
+				e.TimeStamp = msg.Timestamp
+				dt = playStartOpenToSenderData(e)
+			} else if data[1] == "play_start_end.v5" {
+				e, err := krp.parsePlayEndOpenEvent(data)
+				if err != nil || e == nil {
+					continue
+				}
+				e.TimeStamp = msg.Timestamp
+				dt = playEndOpenToSenderData(e)
 			} else {
 				continue
 			}
