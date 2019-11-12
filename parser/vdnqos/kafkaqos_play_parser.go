@@ -108,8 +108,7 @@ type PlayEvent struct {
 }
 
 //222.188.168.212	play.v5	1504250399319	1503281015004993	1.1.0.32	rtmp	pull.lespark.cn	live/57762d4b245bfa685f92af03	-	61.160.199.165	1504250339036	1504250399319	0	14.35	0	47.00	0	13.34	37.22	3342	3968	97199	351830
-
-func (krp *KafkaQosPlayParser) parsePlayEvent(data []string) (e *PlayEvent, err error) {
+func ParsePlayEventData(data []string) (e *PlayEvent, err error) {
 	if data == nil || len(data) < 23 {
 		return nil, fmt.Errorf("not enough data")
 	}
@@ -147,21 +146,11 @@ func (krp *KafkaQosPlayParser) parsePlayEvent(data []string) (e *PlayEvent, err 
 	} else {
 		event.OS = "Android"
 	}
-
-	info, err := ip17mon.Find(event.ClientIp)
-	if err != nil {
-		return nil, fmt.Errorf("invalid ip")
-	}
-	event.Country = info.Country
-	event.City = info.City
-	event.Region = info.Region
-	event.Isp = info.Isp
-	return &event, nil
+	return &event, nil;
 }
 
 //112.96.173.42	play_start.v5	1504250339646	1501257229489135	1.5.1	http	114.55.127.136	/g15695073s0t1504250339644u5953981i17.flv	-	114.55.127.136	3615	3698	1002	ffmpeg	ffmpeg	0	0
-
-func (krp *KafkaQosPlayParser) parsePlayStartEvent(data []string) (e *PlayEvent, err error) {
+func ParsePlayStartEventData(data []string) (e *PlayEvent, err error) {
 	if data == nil || len(data) < 17 {
 		return nil, fmt.Errorf("not enough data")
 	}
@@ -196,21 +185,11 @@ func (krp *KafkaQosPlayParser) parsePlayStartEvent(data []string) (e *PlayEvent,
 	} else {
 		event.OS = "Android"
 	}
-
-	info, err := ip17mon.Find(event.ClientIp)
-	if err != nil {
-		return nil, fmt.Errorf("invalid ip")
-	}
-	event.Country = info.Country
-	event.City = info.City
-	event.Region = info.Region
-	event.Isp = info.Isp
 	return &event, nil
 }
 
 //171.41.69.17	play_end.v5	1504250401045	1503145461301629	1.5.1	http	flv.live-baidu.rela.me	/live/101059696.flv	-	flv.live-baidu.rela.me	1504250386897	1504250401045	0	0 1559514	0	2999	vivo_X9	Android	6.0.1	com.thel	4.0.2	0.378	0.178	0.630	0.052	ffmpeg-3.2	-	WIFI	192.168.1.103	8.8.8.8	-	-	0	0	0	0	0	-  -  -
-
-func (krp *KafkaQosPlayParser) parsePlayEndEvent(data []string) (e *PlayEvent, err error) {
+func ParsePlayEndEventData(data []string) (e *PlayEvent, err error) {
 	if data == nil || len(data) < 40 {
 		return nil, fmt.Errorf("not enough data")
 	}
@@ -251,19 +230,10 @@ func (krp *KafkaQosPlayParser) parsePlayEndEvent(data []string) (e *PlayEvent, e
 	event.IspName = data[32]
 	event.SignalDb, _ = strconv.ParseInt(data[33], 10, 64)
 	event.SignalLevel, _ = strconv.ParseInt(data[34], 10, 64)
-
-	info, err := ip17mon.Find(event.ClientIp)
-	if err != nil {
-		return nil, fmt.Errorf("invalid ip")
-	}
-	event.Country = info.Country
-	event.City = info.City
-	event.Region = info.Region
-	event.Isp = info.Isp
 	return &event, nil
 }
 
-func (krp *KafkaQosPlayParser) parsePlayStartOpenEvent(data []string) (e *PlayEvent, err error) {
+func ParsePlayStartOpenEventData(data []string) (e *PlayEvent, err error) {
 	if data == nil || len(data) < 15 {
 		return nil, fmt.Errorf("not enough data")
 	}
@@ -286,19 +256,10 @@ func (krp *KafkaQosPlayParser) parsePlayStartOpenEvent(data []string) (e *PlayEv
 	event.OsVersion = data[12]
 	event.AppName = data[13]
 	event.AppVersion = data[14]
-
-	info, err := ip17mon.Find(event.ClientIp)
-	if err != nil {
-		return nil, fmt.Errorf("invalid ip")
-	}
-	event.Country = info.Country
-	event.City = info.City
-	event.Region = info.Region
-	event.Isp = info.Isp
 	return &event, nil
 }
 
-func (krp *KafkaQosPlayParser) parsePlayEndOpenEvent(data []string) (e *PlayEvent, err error) {
+func ParsePlayEndOpenEventData(data []string) (e *PlayEvent, err error) {
 	if data == nil || len(data) < 27 {
 		return nil, fmt.Errorf("not enough data")
 	}
@@ -332,6 +293,14 @@ func (krp *KafkaQosPlayParser) parsePlayEndOpenEvent(data []string) (e *PlayEven
 	event.VideoBitrate, _ = strconv.ParseInt(data[24], 10, 64)
 	event.ErrorCode, _ = strconv.ParseInt(data[25], 10, 64)
 	event.ErrorOscode, _ = strconv.ParseInt(data[26], 10, 64)
+	return &event, nil
+}
+
+func (krp *KafkaQosPlayParser) parsePlayEvent(data []string) (e *PlayEvent, err error) {
+	event, err := ParsePlayEventData(data)
+	if err != nil {
+		return nil, err
+	}
 
 	info, err := ip17mon.Find(event.ClientIp)
 	if err != nil {
@@ -341,7 +310,75 @@ func (krp *KafkaQosPlayParser) parsePlayEndOpenEvent(data []string) (e *PlayEven
 	event.City = info.City
 	event.Region = info.Region
 	event.Isp = info.Isp
-	return &event, nil
+	return event, nil
+}
+
+func (krp *KafkaQosPlayParser) parsePlayStartEvent(data []string) (e *PlayEvent, err error) {
+	event, err := ParsePlayStartEventData(data)
+	if err != nil {
+		return nil, err
+	}
+
+	info, err := ip17mon.Find(event.ClientIp)
+	if err != nil {
+		return nil, fmt.Errorf("invalid ip")
+	}
+	event.Country = info.Country
+	event.City = info.City
+	event.Region = info.Region
+	event.Isp = info.Isp
+	return event, nil
+}
+
+func (krp *KafkaQosPlayParser) parsePlayEndEvent(data []string) (e *PlayEvent, err error) {
+	event, err := ParsePlayEndEventData(data)
+	if err != nil {
+		return nil, err
+	}
+
+	info, err := ip17mon.Find(event.ClientIp)
+	if err != nil {
+		return nil, fmt.Errorf("invalid ip")
+	}
+	event.Country = info.Country
+	event.City = info.City
+	event.Region = info.Region
+	event.Isp = info.Isp
+	return event, nil
+}
+
+func (krp *KafkaQosPlayParser) parsePlayStartOpenEvent(data []string) (e *PlayEvent, err error) {
+	event, err := ParsePlayStartOpenEventData(data)
+	if err != nil {
+		return nil, err
+	}
+
+	info, err := ip17mon.Find(event.ClientIp)
+	if err != nil {
+		return nil, fmt.Errorf("invalid ip")
+	}
+	event.Country = info.Country
+	event.City = info.City
+	event.Region = info.Region
+	event.Isp = info.Isp
+	return event, nil
+}
+
+func (krp *KafkaQosPlayParser) parsePlayEndOpenEvent(data []string) (e *PlayEvent, err error) {
+	event, err := ParsePlayEndOpenEventData(data)
+	if err != nil {
+		return nil, err
+	}
+
+	info, err := ip17mon.Find(event.ClientIp)
+	if err != nil {
+		return nil, fmt.Errorf("invalid ip")
+	}
+	event.Country = info.Country
+	event.City = info.City
+	event.Region = info.Region
+	event.Isp = info.Isp
+	return event, nil
 }
 
 func playEventToSenderData(e *PlayEvent) models.Data {
