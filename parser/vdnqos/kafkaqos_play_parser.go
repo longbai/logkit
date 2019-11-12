@@ -162,7 +162,7 @@ func (krp *KafkaQosPlayParser) parsePlayEvent(data []string) (e *PlayEvent, err 
 //112.96.173.42	play_start.v5	1504250339646	1501257229489135	1.5.1	http	114.55.127.136	/g15695073s0t1504250339644u5953981i17.flv	-	114.55.127.136	3615	3698	1002	ffmpeg	ffmpeg	0	0
 
 func (krp *KafkaQosPlayParser) parsePlayStartEvent(data []string) (e *PlayEvent, err error) {
-	if data == nil || len(data) < 16 {
+	if data == nil || len(data) < 17 {
 		return nil, fmt.Errorf("not enough data")
 	}
 	if data[1] != "play_start.v5" {
@@ -208,10 +208,10 @@ func (krp *KafkaQosPlayParser) parsePlayStartEvent(data []string) (e *PlayEvent,
 	return &event, nil
 }
 
-//171.41.69.17	play_end.v5	1504250401045	1503145461301629	1.5.1	http	flv.live-baidu.rela.me	/live/101059696.flv	-	flv.live-baidu.rela.me	1504250386897	1504250401045	0	0 1559514	0	2999	vivo_X9	Android	6.0.1	com.thel	4.0.2	0.378	0.178	0.630	0.052	ffmpeg-3.2;PLDroidPlayer-1.5.1	60	WIFI	192.168.1.103	8.8.8.8	"luckywan"	-	-6300	0	0	-	0	0
-//112.96.173.42	play_end.v5	1504250395823	1501257229489135	1.5.1	http	114.55.127.136	/g15695073s0t1504250339644u5953981i17.flv	-	114.55.127.136	1504250335947	1504250395822	0	0	1822465	0	1002	XiaomiMI_MAX_2	Android	7.1.1	com.sdbean.werewolf	2.07	0.325	0.133	0.777	0.037	ffmpeg-3.2;PLDroidPlayer-1.5.1	60	LTE	10.179.133.142	221.5.88.88	-	-	0	0	0	0	0	-	0	0
+//171.41.69.17	play_end.v5	1504250401045	1503145461301629	1.5.1	http	flv.live-baidu.rela.me	/live/101059696.flv	-	flv.live-baidu.rela.me	1504250386897	1504250401045	0	0 1559514	0	2999	vivo_X9	Android	6.0.1	com.thel	4.0.2	0.378	0.178	0.630	0.052	ffmpeg-3.2	-	WIFI	192.168.1.103	8.8.8.8	-	-	0	0	0	0	0	-  -  -
+
 func (krp *KafkaQosPlayParser) parsePlayEndEvent(data []string) (e *PlayEvent, err error) {
-	if data == nil || len(data) < 37 {
+	if data == nil || len(data) < 40 {
 		return nil, fmt.Errorf("not enough data")
 	}
 	if data[1] != "play_end.v5" {
@@ -238,7 +238,7 @@ func (krp *KafkaQosPlayParser) parsePlayEndEvent(data []string) (e *PlayEvent, e
 	event.GopTime, _ = strconv.ParseInt(data[16], 10, 64)
 
 	event.DeviceModel = data[17]
-	event.OsPlatform = data[18]
+	event.OS = data[18]
 	event.OsVersion = data[19]
 	event.AppName = data[20]
 	event.AppVersion = data[21]
@@ -246,19 +246,11 @@ func (krp *KafkaQosPlayParser) parsePlayEndEvent(data []string) (e *PlayEvent, e
 	event.AppCpuUsage, _ = strconv.ParseFloat(data[23], 64)
 	event.SysMemoryUsage, _ = strconv.ParseFloat(data[24], 64)
 	event.AppMemoryUsage, _ = strconv.ParseFloat(data[25], 64)
-	event.UiFps, _ = strconv.ParseInt(data[26], 10, 64)
-	event.NetworkType = data[27]
-	event.IspName = data[28]
-	event.SignalDb, _ = strconv.ParseInt(data[29], 10, 64)
-	event.SignalLevel, _ = strconv.ParseInt(data[30], 10, 64)
-	event.ErrorCode, _ = strconv.ParseInt(data[35], 10, 64)
-	event.ErrorOscode, _ = strconv.ParseInt(data[36], 10, 64)
 
-	if strings.Contains(event.Device, "-") {
-		event.OS = "iOS"
-	} else {
-		event.OS = "Android"
-	}
+	event.NetworkType = data[28]
+	event.IspName = data[32]
+	event.SignalDb, _ = strconv.ParseInt(data[33], 10, 64)
+	event.SignalLevel, _ = strconv.ParseInt(data[34], 10, 64)
 
 	info, err := ip17mon.Find(event.ClientIp)
 	if err != nil {
@@ -334,8 +326,8 @@ func (krp *KafkaQosPlayParser) parsePlayEndOpenEvent(data []string) (e *PlayEven
 	event.AudioDecodeType = data[18]
 	event.FirstVideoTime, _ = strconv.ParseInt(data[19], 10, 64)
 
-	event.VideoRenderFps, _ = strconv.ParseInt(data[21], 10, 64)
-	event.AudioRenderFps, _ = strconv.ParseInt(data[22], 10, 64)
+	event.VideoSourceFps, _ = strconv.ParseInt(data[21], 10, 64)
+	event.AudioSourceFps, _ = strconv.ParseInt(data[22], 10, 64)
 	event.AudioBitrate, _ = strconv.ParseInt(data[23], 10, 64)
 	event.VideoBitrate, _ = strconv.ParseInt(data[24], 10, 64)
 	event.ErrorCode, _ = strconv.ParseInt(data[25], 10, 64)
