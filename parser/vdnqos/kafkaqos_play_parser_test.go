@@ -46,25 +46,25 @@ func TestParsePlayEndEventData(t *testing.T) {
 	assert.EqualValues(t, "play_end.v5", e.Tag)
 }
 
-func TestParsePlayStartOpenEventData(t *testing.T) {
+func TestParsePlayStartOperationEventData(t *testing.T) {
 	string := `171.81.255.128	play_start_op.v5	1573117309229	106252712	1.1.0.79
 	http	pili-live-hdl.rela.me	rela-live/104153993.flv	-	-
 	iPhone10,1	iOS	11.2.6	com.rela	5.0.7`
 	data := strings.Split(string, "\t")
-	e, err := ParsePlayStartOpenEventData(data)
+	e, err := ParsePlayStartOperationEventData(data)
 	if err != nil {
 		t.Error(err)
 	}
 	assert.EqualValues(t, "play_start_op.v5", e.Tag)
 }
 
-func TestParsePlayEndOpenEventData(t *testing.T) {
+func TestParsePlayEndOperationEventData(t *testing.T) {
 	string := `210.13.93.225	play_end_op.v5	1573117195295	104153993	1.1.0.79
 	http	218.98.28.151	rela-live/106559880.flv	-	218.98.28.151	OPPO
 	Android	6.0.1	com.thel	5.1.0	30325	0	-	aac	167
 	1	28	43	51828	717698	0	0`
 	data := strings.Split(string, "\t")
-	e, err := ParsePlayEndOpenEventData(data)
+	e, err := ParsePlayEndOperationEventData(data)
 	if err != nil {
 		t.Error(err)
 	}

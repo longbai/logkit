@@ -151,7 +151,7 @@ func ParsePlayEventData(data []string) (e *PlayEvent, err error) {
 
 //112.96.173.42	play_start.v5	1504250339646	1501257229489135	1.5.1	http	114.55.127.136	/g15695073s0t1504250339644u5953981i17.flv	-	114.55.127.136	3615	3698	1002	ffmpeg	ffmpeg	0	0
 func ParsePlayStartEventData(data []string) (e *PlayEvent, err error) {
-	if data == nil || len(data) < 17 {
+	if data == nil || len(data) < 16 {
 		return nil, fmt.Errorf("not enough data")
 	}
 	if data[1] != "play_start.v5" {
@@ -190,7 +190,7 @@ func ParsePlayStartEventData(data []string) (e *PlayEvent, err error) {
 
 //171.41.69.17	play_end.v5	1504250401045	1503145461301629	1.5.1	http	flv.live-baidu.rela.me	/live/101059696.flv	-	flv.live-baidu.rela.me	1504250386897	1504250401045	0	0 1559514	0	2999	vivo_X9	Android	6.0.1	com.thel	4.0.2	0.378	0.178	0.630	0.052	ffmpeg-3.2	-	WIFI	192.168.1.103	8.8.8.8	-	-	0	0	0	0	0	-  -  -
 func ParsePlayEndEventData(data []string) (e *PlayEvent, err error) {
-	if data == nil || len(data) < 40 {
+	if data == nil || len(data) < 37 {
 		return nil, fmt.Errorf("not enough data")
 	}
 	if data[1] != "play_end.v5" {
@@ -226,14 +226,25 @@ func ParsePlayEndEventData(data []string) (e *PlayEvent, err error) {
 	event.SysMemoryUsage, _ = strconv.ParseFloat(data[24], 64)
 	event.AppMemoryUsage, _ = strconv.ParseFloat(data[25], 64)
 
-	event.NetworkType = data[28]
-	event.IspName = data[32]
-	event.SignalDb, _ = strconv.ParseInt(data[33], 10, 64)
-	event.SignalLevel, _ = strconv.ParseInt(data[34], 10, 64)
+	if len(data) == 37 {
+		event.UiFps, _ = strconv.ParseInt(data[26], 10, 64)
+		event.NetworkType = data[27]
+		event.IspName = data[28]
+		event.SignalDb, _ = strconv.ParseInt(data[29], 10, 64)
+		event.SignalLevel, _ = strconv.ParseInt(data[30], 10, 64)
+		event.ErrorCode, _ = strconv.ParseInt(data[35], 10, 64)
+		event.ErrorOscode, _ = strconv.ParseInt(data[36], 10, 64)
+	} else if len(data) >= 40 {
+		event.NetworkType = data[28]
+		event.IspName = data[32]
+		event.SignalDb, _ = strconv.ParseInt(data[33], 10, 64)
+		event.SignalLevel, _ = strconv.ParseInt(data[34], 10, 64)
+	}
+
 	return &event, nil
 }
 
-func ParsePlayStartOpenEventData(data []string) (e *PlayEvent, err error) {
+func ParsePlayStartOperationEventData(data []string) (e *PlayEvent, err error) {
 	if data == nil || len(data) < 15 {
 		return nil, fmt.Errorf("not enough data")
 	}
@@ -259,7 +270,7 @@ func ParsePlayStartOpenEventData(data []string) (e *PlayEvent, err error) {
 	return &event, nil
 }
 
-func ParsePlayEndOpenEventData(data []string) (e *PlayEvent, err error) {
+func ParsePlayEndOperationEventData(data []string) (e *PlayEvent, err error) {
 	if data == nil || len(data) < 27 {
 		return nil, fmt.Errorf("not enough data")
 	}
@@ -346,8 +357,8 @@ func (krp *KafkaQosPlayParser) parsePlayEndEvent(data []string) (e *PlayEvent, e
 	return event, nil
 }
 
-func (krp *KafkaQosPlayParser) parsePlayStartOpenEvent(data []string) (e *PlayEvent, err error) {
-	event, err := ParsePlayStartOpenEventData(data)
+func (krp *KafkaQosPlayParser) parsePlayStartOperationEvent(data []string) (e *PlayEvent, err error) {
+	event, err := ParsePlayStartOperationEventData(data)
 	if err != nil {
 		return nil, err
 	}
@@ -363,8 +374,8 @@ func (krp *KafkaQosPlayParser) parsePlayStartOpenEvent(data []string) (e *PlayEv
 	return event, nil
 }
 
-func (krp *KafkaQosPlayParser) parsePlayEndOpenEvent(data []string) (e *PlayEvent, err error) {
-	event, err := ParsePlayEndOpenEventData(data)
+func (krp *KafkaQosPlayParser) parsePlayEndOperationEvent(data []string) (e *PlayEvent, err error) {
+	event, err := ParsePlayEndOperationEventData(data)
 	if err != nil {
 		return nil, err
 	}
@@ -579,14 +590,14 @@ func (krp *KafkaQosPlayParser) Parse(lines []string) ([]models.Data, error) {
 				e.TimeStamp = msg.Timestamp
 				dt = playEndEventToSenderData(e)
 			} else if data[1] == "play_start_op.v5" {
-				e, err := krp.parsePlayStartEvent(data)
+				e, err := krp.parsePlayStartOperationEvent(data)
 				if err != nil || e == nil {
 					continue
 				}
 				e.TimeStamp = msg.Timestamp
 				dt = playStartOpenToSenderData(e)
-			} else if data[1] == "play_start_end.v5" {
-				e, err := krp.parsePlayEndOpenEvent(data)
+			} else if data[1] == "play_end_op.v5" {
+				e, err := krp.parsePlayEndOperationEvent(data)
 				if err != nil || e == nil {
 					continue
 				}
