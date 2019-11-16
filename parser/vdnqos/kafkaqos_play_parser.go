@@ -108,8 +108,7 @@ type PlayEvent struct {
 }
 
 //222.188.168.212	play.v5	1504250399319	1503281015004993	1.1.0.32	rtmp	pull.lespark.cn	live/57762d4b245bfa685f92af03	-	61.160.199.165	1504250339036	1504250399319	0	14.35	0	47.00	0	13.34	37.22	3342	3968	97199	351830
-
-func (krp *KafkaQosPlayParser) parsePlayEvent(data []string) (e *PlayEvent, err error) {
+func ParsePlayEventData(data []string) (e *PlayEvent, err error) {
 	if data == nil || len(data) < 23 {
 		return nil, fmt.Errorf("not enough data")
 	}
@@ -144,24 +143,14 @@ func (krp *KafkaQosPlayParser) parsePlayEvent(data []string) (e *PlayEvent, err 
 
 	if strings.Contains(event.Device, "-") {
 		event.OS = "iOS"
-	} else {
+	} else if IsAndroidDevice(event.Device) {
 		event.OS = "Android"
 	}
-
-	info, err := ip17mon.Find(event.ClientIp)
-	if err != nil {
-		return nil, fmt.Errorf("invalid ip")
-	}
-	event.Country = info.Country
-	event.City = info.City
-	event.Region = info.Region
-	event.Isp = info.Isp
-	return &event, nil
+	return &event, nil;
 }
 
 //112.96.173.42	play_start.v5	1504250339646	1501257229489135	1.5.1	http	114.55.127.136	/g15695073s0t1504250339644u5953981i17.flv	-	114.55.127.136	3615	3698	1002	ffmpeg	ffmpeg	0	0
-
-func (krp *KafkaQosPlayParser) parsePlayStartEvent(data []string) (e *PlayEvent, err error) {
+func ParsePlayStartEventData(data []string) (e *PlayEvent, err error) {
 	if data == nil || len(data) < 16 {
 		return nil, fmt.Errorf("not enough data")
 	}
@@ -193,24 +182,14 @@ func (krp *KafkaQosPlayParser) parsePlayStartEvent(data []string) (e *PlayEvent,
 
 	if strings.Contains(event.Device, "-") {
 		event.OS = "iOS"
-	} else {
+	} else if IsAndroidDevice(event.Device) {
 		event.OS = "Android"
 	}
-
-	info, err := ip17mon.Find(event.ClientIp)
-	if err != nil {
-		return nil, fmt.Errorf("invalid ip")
-	}
-	event.Country = info.Country
-	event.City = info.City
-	event.Region = info.Region
-	event.Isp = info.Isp
 	return &event, nil
 }
 
-//171.41.69.17	play_end.v5	1504250401045	1503145461301629	1.5.1	http	flv.live-baidu.rela.me	/live/101059696.flv	-	flv.live-baidu.rela.me	1504250386897	1504250401045	0	0 1559514	0	2999	vivo_X9	Android	6.0.1	com.thel	4.0.2	0.378	0.178	0.630	0.052	ffmpeg-3.2;PLDroidPlayer-1.5.1	60	WIFI	192.168.1.103	8.8.8.8	"luckywan"	-	-6300	0	0	-	0	0
-//112.96.173.42	play_end.v5	1504250395823	1501257229489135	1.5.1	http	114.55.127.136	/g15695073s0t1504250339644u5953981i17.flv	-	114.55.127.136	1504250335947	1504250395822	0	0	1822465	0	1002	XiaomiMI_MAX_2	Android	7.1.1	com.sdbean.werewolf	2.07	0.325	0.133	0.777	0.037	ffmpeg-3.2;PLDroidPlayer-1.5.1	60	LTE	10.179.133.142	221.5.88.88	-	-	0	0	0	0	0	-	0	0
-func (krp *KafkaQosPlayParser) parsePlayEndEvent(data []string) (e *PlayEvent, err error) {
+//171.41.69.17	play_end.v5	1504250401045	1503145461301629	1.5.1	http	flv.live-baidu.rela.me	/live/101059696.flv	-	flv.live-baidu.rela.me	1504250386897	1504250401045	0	0 1559514	0	2999	vivo_X9	Android	6.0.1	com.thel	4.0.2	0.378	0.178	0.630	0.052	ffmpeg-3.2	-	WIFI	192.168.1.103	8.8.8.8	-	-	0	0	0	0	0	-  -  -
+func ParsePlayEndEventData(data []string) (e *PlayEvent, err error) {
 	if data == nil || len(data) < 37 {
 		return nil, fmt.Errorf("not enough data")
 	}
@@ -238,7 +217,7 @@ func (krp *KafkaQosPlayParser) parsePlayEndEvent(data []string) (e *PlayEvent, e
 	event.GopTime, _ = strconv.ParseInt(data[16], 10, 64)
 
 	event.DeviceModel = data[17]
-	event.OsPlatform = data[18]
+	event.OS = data[18]
 	event.OsVersion = data[19]
 	event.AppName = data[20]
 	event.AppVersion = data[21]
@@ -246,18 +225,91 @@ func (krp *KafkaQosPlayParser) parsePlayEndEvent(data []string) (e *PlayEvent, e
 	event.AppCpuUsage, _ = strconv.ParseFloat(data[23], 64)
 	event.SysMemoryUsage, _ = strconv.ParseFloat(data[24], 64)
 	event.AppMemoryUsage, _ = strconv.ParseFloat(data[25], 64)
-	event.UiFps, _ = strconv.ParseInt(data[26], 10, 64)
-	event.NetworkType = data[27]
-	event.IspName = data[28]
-	event.SignalDb, _ = strconv.ParseInt(data[29], 10, 64)
-	event.SignalLevel, _ = strconv.ParseInt(data[30], 10, 64)
-	event.ErrorCode, _ = strconv.ParseInt(data[35], 10, 64)
-	event.ErrorOscode, _ = strconv.ParseInt(data[36], 10, 64)
 
-	if strings.Contains(event.Device, "-") {
-		event.OS = "iOS"
-	} else {
-		event.OS = "Android"
+	if len(data) == 37 {
+		event.UiFps, _ = strconv.ParseInt(data[26], 10, 64)
+		event.NetworkType = data[27]
+		event.IspName = data[28]
+		event.SignalDb, _ = strconv.ParseInt(data[29], 10, 64)
+		event.SignalLevel, _ = strconv.ParseInt(data[30], 10, 64)
+		event.ErrorCode, _ = strconv.ParseInt(data[35], 10, 64)
+		event.ErrorOscode, _ = strconv.ParseInt(data[36], 10, 64)
+	} else if len(data) >= 40 {
+		event.NetworkType = data[28]
+		event.IspName = data[32]
+		event.SignalDb, _ = strconv.ParseInt(data[33], 10, 64)
+		event.SignalLevel, _ = strconv.ParseInt(data[34], 10, 64)
+	}
+
+	return &event, nil
+}
+
+func ParsePlayStartOperationEventData(data []string) (e *PlayEvent, err error) {
+	if data == nil || len(data) < 15 {
+		return nil, fmt.Errorf("not enough data")
+	}
+	if data[1] != "play_start_op.v5" {
+		return nil, fmt.Errorf("not stream")
+	}
+	event := PlayEvent{}
+	event.ClientIp = data[0]
+	event.Data = data
+	event.Tag = data[1]
+	event.ClientTime = buildTime(data[2])
+	event.Device = data[3]
+	event.Protocol = data[5]
+	event.Domain = data[6]
+	event.Path = data[7]
+	event.ReqID = data[8]
+	event.RemoteIP = data[9]
+	event.DeviceModel = data[10]
+	event.OS = data[11]
+	event.OsVersion = data[12]
+	event.AppName = data[13]
+	event.AppVersion = data[14]
+	return &event, nil
+}
+
+func ParsePlayEndOperationEventData(data []string) (e *PlayEvent, err error) {
+	if data == nil || len(data) < 27 {
+		return nil, fmt.Errorf("not enough data")
+	}
+	if data[1] != "play_end_op.v5" {
+		return nil, fmt.Errorf("not stream")
+	}
+	event := PlayEvent{}
+	event.ClientIp = data[0]
+	event.Data = data
+	event.Tag = data[1]
+	event.ClientTime = buildTime(data[2])
+	event.Device = data[3]
+	event.Protocol = data[5]
+	event.Domain = data[6]
+	event.Path = data[7]
+	event.ReqID = data[8]
+	event.RemoteIP = data[9]
+	event.DeviceModel = data[10]
+	event.OS = data[11]
+	event.OsVersion = data[12]
+	event.AppName = data[13]
+	event.AppVersion = data[14]
+
+	event.VideoDecodeType = data[17]
+	event.AudioDecodeType = data[18]
+
+	event.VideoSourceFps, _ = strconv.ParseInt(data[21], 10, 64)
+	event.AudioSourceFps, _ = strconv.ParseInt(data[22], 10, 64)
+	event.AudioBitrate, _ = strconv.ParseInt(data[23], 10, 64)
+	event.VideoBitrate, _ = strconv.ParseInt(data[24], 10, 64)
+	event.ErrorCode, _ = strconv.ParseInt(data[25], 10, 64)
+	event.ErrorOscode, _ = strconv.ParseInt(data[26], 10, 64)
+	return &event, nil
+}
+
+func (krp *KafkaQosPlayParser) parsePlayEvent(data []string) (e *PlayEvent, err error) {
+	event, err := ParsePlayEventData(data)
+	if err != nil {
+		return nil, err
 	}
 
 	info, err := ip17mon.Find(event.ClientIp)
@@ -268,7 +320,75 @@ func (krp *KafkaQosPlayParser) parsePlayEndEvent(data []string) (e *PlayEvent, e
 	event.City = info.City
 	event.Region = info.Region
 	event.Isp = info.Isp
-	return &event, nil
+	return event, nil
+}
+
+func (krp *KafkaQosPlayParser) parsePlayStartEvent(data []string) (e *PlayEvent, err error) {
+	event, err := ParsePlayStartEventData(data)
+	if err != nil {
+		return nil, err
+	}
+
+	info, err := ip17mon.Find(event.ClientIp)
+	if err != nil {
+		return nil, fmt.Errorf("invalid ip")
+	}
+	event.Country = info.Country
+	event.City = info.City
+	event.Region = info.Region
+	event.Isp = info.Isp
+	return event, nil
+}
+
+func (krp *KafkaQosPlayParser) parsePlayEndEvent(data []string) (e *PlayEvent, err error) {
+	event, err := ParsePlayEndEventData(data)
+	if err != nil {
+		return nil, err
+	}
+
+	info, err := ip17mon.Find(event.ClientIp)
+	if err != nil {
+		return nil, fmt.Errorf("invalid ip")
+	}
+	event.Country = info.Country
+	event.City = info.City
+	event.Region = info.Region
+	event.Isp = info.Isp
+	return event, nil
+}
+
+func (krp *KafkaQosPlayParser) parsePlayStartOperationEvent(data []string) (e *PlayEvent, err error) {
+	event, err := ParsePlayStartOperationEventData(data)
+	if err != nil {
+		return nil, err
+	}
+
+	info, err := ip17mon.Find(event.ClientIp)
+	if err != nil {
+		return nil, fmt.Errorf("invalid ip")
+	}
+	event.Country = info.Country
+	event.City = info.City
+	event.Region = info.Region
+	event.Isp = info.Isp
+	return event, nil
+}
+
+func (krp *KafkaQosPlayParser) parsePlayEndOperationEvent(data []string) (e *PlayEvent, err error) {
+	event, err := ParsePlayEndOperationEventData(data)
+	if err != nil {
+		return nil, err
+	}
+
+	info, err := ip17mon.Find(event.ClientIp)
+	if err != nil {
+		return nil, fmt.Errorf("invalid ip")
+	}
+	event.Country = info.Country
+	event.City = info.City
+	event.Region = info.Region
+	event.Isp = info.Isp
+	return event, nil
 }
 
 func playEventToSenderData(e *PlayEvent) models.Data {
@@ -377,6 +497,62 @@ func playEndEventToSenderData(e *PlayEvent) models.Data {
 	return d
 }
 
+func playStartOpenToSenderData(e *PlayEvent) models.Data {
+	d := models.Data{}
+	d["client_ip"] = e.ClientIp
+	d["tag"] = e.Tag
+	d["client_time"] = e.ClientTime.Format(time.RFC3339)
+	d["server_time"] = time.Unix(e.TimeStamp/1000, 0).Format(time.RFC3339)
+	d["device"] = e.Device
+	d["protocol"] = e.Protocol
+	d["domain"] = e.Domain
+	d["path"] = e.Path
+	d["reqid"] = e.ReqID
+	d["remote_ip"] = e.RemoteIP
+	d["os"] = e.OS
+	d["country"] = e.Country
+	d["city"] = e.City
+	d["region"] = e.Region
+	d["isp"] = e.Isp
+	d["device_model"] = e.DeviceModel
+	d["os_version"] = e.OsVersion
+	d["app_name"] = e.AppName
+	d["app_version"] = e.AppVersion
+
+	return d
+}
+
+func playEndOpenToSenderData(e *PlayEvent) models.Data {
+	d := models.Data{}
+	d["client_ip"] = e.ClientIp
+	d["tag"] = e.Tag
+	d["client_time"] = e.ClientTime.Format(time.RFC3339)
+	d["server_time"] = time.Unix(e.TimeStamp/1000, 0).Format(time.RFC3339)
+	d["device"] = e.Device
+	d["protocol"] = e.Protocol
+	d["domain"] = e.Domain
+	d["path"] = e.Path
+	d["reqid"] = e.ReqID
+	d["remote_ip"] = e.RemoteIP
+	d["os"] = e.OS
+	d["country"] = e.Country
+	d["city"] = e.City
+	d["region"] = e.Region
+	d["isp"] = e.Isp
+
+	d["video_decode_type"] = e.VideoDecodeType
+	d["audio_decode_type"] = e.AudioDecodeType
+	d["video_src_fps"] = e.VideoSourceFps
+	d["audio_src_fps"] = e.AudioSourceFps
+	d["audio_bitrate"] = e.AudioBitrate
+	d["video_bitrate"] = e.VideoBitrate
+
+	d["err_code"] = e.ErrorCode
+	d["err_os_code"] = e.ErrorOscode
+
+	return d
+}
+
 func (krp *KafkaQosPlayParser) Parse(lines []string) ([]models.Data, error) {
 	datas := []models.Data{}
 	for _, line := range lines {
@@ -413,6 +589,20 @@ func (krp *KafkaQosPlayParser) Parse(lines []string) ([]models.Data, error) {
 				}
 				e.TimeStamp = msg.Timestamp
 				dt = playEndEventToSenderData(e)
+			} else if data[1] == "play_start_op.v5" {
+				e, err := krp.parsePlayStartOperationEvent(data)
+				if err != nil || e == nil {
+					continue
+				}
+				e.TimeStamp = msg.Timestamp
+				dt = playStartOpenToSenderData(e)
+			} else if data[1] == "play_end_op.v5" {
+				e, err := krp.parsePlayEndOperationEvent(data)
+				if err != nil || e == nil {
+					continue
+				}
+				e.TimeStamp = msg.Timestamp
+				dt = playEndOpenToSenderData(e)
 			} else {
 				continue
 			}

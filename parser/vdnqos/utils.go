@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"strconv"
+	"time"
 	"strings"
 )
 
@@ -117,4 +118,24 @@ func getDomains(apmHost, path string) (map[string]bool, error) {
 		d[v] = true
 	}
 	return d, nil
+}
+
+func IsAndroidDevice(device string) bool {
+	isAndroidDevice := false
+	if (len(device) > 13) {
+		temp := device[0:13]
+		timestamp, err := strconv.ParseInt(temp, 10, 64)
+		if err != nil {
+			return isAndroidDevice
+		}
+		timeLayout := "2006-01-02 15:04:05"                             //转化所需模板
+		dataTimeStr := time.Unix(timestamp/1000, 0).Format(timeLayout) //设置时间戳 使用模板格式化为日期字符串
+		_, err = time.Parse(timeLayout, dataTimeStr)
+		if err == nil {
+			isAndroidDevice = true
+			return isAndroidDevice
+		}
+
+	}
+	return isAndroidDevice
 }
