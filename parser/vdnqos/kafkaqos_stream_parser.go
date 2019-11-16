@@ -33,6 +33,7 @@ func init() {
 type KafkaQosStreamParser struct {
 	name                     string
 	domains                  map[string]bool
+	hubs                     map[string]string
 	apmHost                  string
 	streamDomainRetrievePath string
 }
@@ -45,12 +46,13 @@ func (k *KafkaQosStreamParser) RefreshDomains() {
 	ticker := time.NewTicker(time.Minute * 5)
 	go func() {
 		for range ticker.C {
-			domains, err := getDomains(k.apmHost, k.streamDomainRetrievePath)
+			domains, hubs, err := getDomainsAndHubs(k.apmHost, k.streamDomainRetrievePath)
 			if err != nil {
 				log.Error(err)
 			}
 			k.domains = domains
-			log.Debugf("%s successfully updated play domains to %v", k.Name(), domains)
+			k.hubs = hubs
+			log.Debugf("%s successfully updated play domains to %v, hubs %v", k.Name(), domains, hubs)
 		}
 	}()
 }
@@ -461,9 +463,17 @@ func (krp *KafkaQosStreamParser) Parse(lines []string) ([]models.Data, error) {
 
 			if _, ok := krp.domains[e.Domain]; ok {
 				datas = append(datas, dt)
-				log.Debug("domain add", e.Domain)
+			} else if domainIsIp(e.Domain){
+				s := strings.Split(e.Path, "/")
+				if len(s)>2{
+					if d, ok1 := krp.hubs[s[1]]; ok1 {
+						log.Debug("hub add", e.Path, e.Domain, d)
+						e.Domain = d // fixed ip to domain
+						datas = append(datas, dt)
+					}
+				}
 			}
-			log.Debug("domain", e.Domain, len(e.Domain), e.Domain, e.Path, len(datas))
+			log.Debug("domain", e.Domain, e.Path, len(datas))
 		}
 	}
 	return datas, nil
@@ -479,7 +489,7 @@ func NewKafkaQosStreamParser(c conf.MapConf) (parser.Parser, error) {
 	}
 	apmHost, _ := c.GetStringOr("apm_host", "")
 	streamDomainRetrievePath, _ := c.GetStringOr("stream_domain_retrieve_path", "")
-	domains, err := getDomains(apmHost, streamDomainRetrievePath)
+	domains, hubs, err := getDomainsAndHubs(apmHost, streamDomainRetrievePath)
 	if err != nil {
 		log.Error(err)
 	}
@@ -487,6 +497,7 @@ func NewKafkaQosStreamParser(c conf.MapConf) (parser.Parser, error) {
 	kafkaQosStreamParser := &KafkaQosStreamParser{
 		name:                     name,
 		domains:                  domains,
+		hubs:                     hubs,
 		apmHost:                  apmHost,
 		streamDomainRetrievePath: streamDomainRetrievePath,
 	}

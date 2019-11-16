@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+	"strings"
 )
 
 func decodeMessage(message []byte) (*Message, error) {
@@ -64,7 +65,33 @@ func decodeMessage(message []byte) (*Message, error) {
 	return msg, nil
 }
 
-func getDomains(apmHost, path string) (map[string]bool, error) {
+func getDomainsAndHubs(apmHost, path string) (map[string]bool, map[string]string, error) {
+	list, err := getDomainList(apmHost, path)
+	if err != nil {
+		return nil, nil, err
+	}
+	domains := map[string]bool{}
+	hubs := map[string]string{}
+	for _, v := range list {
+		s := strings.Split(v, "/")
+		domains[s[0]] = true
+		if len(s) > 1 {
+			hubs[s[1]] = s[0]
+		}
+	}
+	return domains, hubs, nil
+}
+
+func domainIsIp(s string) bool {
+	if len(s) < 7 {
+		return false
+	}
+	x := []byte(s)
+	c := int(x[len(x)-1])
+	return c >= 48 && c <= 57
+}
+
+func getDomainList(apmHost, path string) ([]string, error) {
 	resp, err := http.Get(apmHost + path)
 	if err != nil {
 		return nil, err
@@ -75,6 +102,14 @@ func getDomains(apmHost, path string) (map[string]bool, error) {
 	}
 	var domains []string
 	err = jsoniter.Unmarshal(bytes, &domains)
+	if err != nil {
+		return nil, err
+	}
+	return domains, err
+}
+
+func getDomains(apmHost, path string) (map[string]bool, error) {
+	domains, err := getDomainList(apmHost, path)
 	if err != nil {
 		return nil, err
 	}
