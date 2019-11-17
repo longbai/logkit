@@ -311,15 +311,6 @@ func (krp *KafkaQosPlayParser) parsePlayEvent(data []string) (e *PlayEvent, err 
 	if err != nil {
 		return nil, err
 	}
-
-	info, err := ip17mon.Find(event.ClientIp)
-	if err != nil {
-		return nil, fmt.Errorf("invalid ip")
-	}
-	event.Country = info.Country
-	event.City = info.City
-	event.Region = info.Region
-	event.Isp = info.Isp
 	return event, nil
 }
 
@@ -328,15 +319,6 @@ func (krp *KafkaQosPlayParser) parsePlayStartEvent(data []string) (e *PlayEvent,
 	if err != nil {
 		return nil, err
 	}
-
-	info, err := ip17mon.Find(event.ClientIp)
-	if err != nil {
-		return nil, fmt.Errorf("invalid ip")
-	}
-	event.Country = info.Country
-	event.City = info.City
-	event.Region = info.Region
-	event.Isp = info.Isp
 	return event, nil
 }
 
@@ -345,15 +327,6 @@ func (krp *KafkaQosPlayParser) parsePlayEndEvent(data []string) (e *PlayEvent, e
 	if err != nil {
 		return nil, err
 	}
-
-	info, err := ip17mon.Find(event.ClientIp)
-	if err != nil {
-		return nil, fmt.Errorf("invalid ip")
-	}
-	event.Country = info.Country
-	event.City = info.City
-	event.Region = info.Region
-	event.Isp = info.Isp
 	return event, nil
 }
 
@@ -362,15 +335,6 @@ func (krp *KafkaQosPlayParser) parsePlayStartOperationEvent(data []string) (e *P
 	if err != nil {
 		return nil, err
 	}
-
-	info, err := ip17mon.Find(event.ClientIp)
-	if err != nil {
-		return nil, fmt.Errorf("invalid ip")
-	}
-	event.Country = info.Country
-	event.City = info.City
-	event.Region = info.Region
-	event.Isp = info.Isp
 	return event, nil
 }
 
@@ -379,17 +343,22 @@ func (krp *KafkaQosPlayParser) parsePlayEndOperationEvent(data []string) (e *Pla
 	if err != nil {
 		return nil, err
 	}
+	return event, nil
+}
 
+func (event *PlayEvent) appendIpInfo(){
 	info, err := ip17mon.Find(event.ClientIp)
 	if err != nil {
-		return nil, fmt.Errorf("invalid ip")
+		log.Println("invalid ip", event.ClientIp)
+		return
 	}
 	event.Country = info.Country
 	event.City = info.City
 	event.Region = info.Region
 	event.Isp = info.Isp
-	return event, nil
 }
+
+
 
 func playEventToSenderData(e *PlayEvent) models.Data {
 	d := models.Data{}
@@ -497,7 +466,7 @@ func playEndEventToSenderData(e *PlayEvent) models.Data {
 	return d
 }
 
-func playStartOpenToSenderData(e *PlayEvent) models.Data {
+func playStartOperationToSenderData(e *PlayEvent) models.Data {
 	d := models.Data{}
 	d["client_ip"] = e.ClientIp
 	d["tag"] = e.Tag
@@ -522,7 +491,7 @@ func playStartOpenToSenderData(e *PlayEvent) models.Data {
 	return d
 }
 
-func playEndOpenToSenderData(e *PlayEvent) models.Data {
+func playEndOperationToSenderData(e *PlayEvent) models.Data {
 	d := models.Data{}
 	d["client_ip"] = e.ClientIp
 	d["tag"] = e.Tag
@@ -553,6 +522,8 @@ func playEndOpenToSenderData(e *PlayEvent) models.Data {
 	return d
 }
 
+type eventConvert func(e *PlayEvent) models.Data
+
 func (krp *KafkaQosPlayParser) Parse(lines []string) ([]models.Data, error) {
 	datas := []models.Data{}
 	for _, line := range lines {
@@ -567,45 +538,43 @@ func (krp *KafkaQosPlayParser) Parse(lines []string) ([]models.Data, error) {
 			}
 			var e *PlayEvent
 			var err error
-			var dt models.Data
+			var converter eventConvert
 			if data[1] == "play.v5" {
 				e, err = krp.parsePlayEvent(data)
 				if err != nil || e == nil {
 					continue
 				}
-				e.TimeStamp = msg.Timestamp
-				dt = playEventToSenderData(e)
+				converter =  playEventToSenderData
 			} else if data[1] == "play_start.v5" {
 				e, err = krp.parsePlayStartEvent(data)
 				if err != nil || e == nil {
 					continue
 				}
-				e.TimeStamp = msg.Timestamp
-				dt = playStartEventToSenderData(e)
+				converter = playStartEventToSenderData
 			} else if data[1] == "play_end.v5" {
 				e, err = krp.parsePlayEndEvent(data)
 				if err != nil || e == nil {
 					continue
 				}
-				e.TimeStamp = msg.Timestamp
-				dt = playEndEventToSenderData(e)
+				converter =  playEndEventToSenderData
 			} else if data[1] == "play_start_op.v5" {
-				e, err := krp.parsePlayStartOperationEvent(data)
+				e, err = krp.parsePlayStartOperationEvent(data)
 				if err != nil || e == nil {
 					continue
 				}
-				e.TimeStamp = msg.Timestamp
-				dt = playStartOpenToSenderData(e)
+				converter =  playStartOperationToSenderData
 			} else if data[1] == "play_end_op.v5" {
-				e, err := krp.parsePlayEndOperationEvent(data)
+				e, err = krp.parsePlayEndOperationEvent(data)
 				if err != nil || e == nil {
 					continue
 				}
-				e.TimeStamp = msg.Timestamp
-				dt = playEndOpenToSenderData(e)
+				converter = playEndOperationToSenderData
 			} else {
 				continue
 			}
+			e.appendIpInfo()
+			e.TimeStamp = msg.Timestamp
+			dt := converter(e)
 			if _, ok := krp.domains[e.Domain]; ok {
 				datas = append(datas, dt)
 				//log.Debug("domain add", e.Domain)
