@@ -497,7 +497,7 @@ func playEndEventToSenderData(e *PlayEvent) models.Data {
 	return d
 }
 
-func playStartOpenToSenderData(e *PlayEvent) models.Data {
+func playStartOperationToSenderData(e *PlayEvent) models.Data {
 	d := models.Data{}
 	d["client_ip"] = e.ClientIp
 	d["tag"] = e.Tag
@@ -522,7 +522,7 @@ func playStartOpenToSenderData(e *PlayEvent) models.Data {
 	return d
 }
 
-func playEndOpenToSenderData(e *PlayEvent) models.Data {
+func playEndOperationToSenderData(e *PlayEvent) models.Data {
 	d := models.Data{}
 	d["client_ip"] = e.ClientIp
 	d["tag"] = e.Tag
@@ -595,14 +595,14 @@ func (krp *KafkaQosPlayParser) Parse(lines []string) ([]models.Data, error) {
 					continue
 				}
 				e.TimeStamp = msg.Timestamp
-				dt = playStartOpenToSenderData(e)
+				dt = playStartOperationToSenderData(e)
 			} else if data[1] == "play_end_op.v5" {
 				e, err := krp.parsePlayEndOperationEvent(data)
 				if err != nil || e == nil {
 					continue
 				}
 				e.TimeStamp = msg.Timestamp
-				dt = playEndOpenToSenderData(e)
+				dt = playEndOperationToSenderData(e)
 			} else {
 				continue
 			}
