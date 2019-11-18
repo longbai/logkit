@@ -167,10 +167,7 @@ func buildTime(s string) time.Time {
 
 func (krp *KafkaQosStreamParser) parseStreamStartEvent(data []string) (e *StreamEvent, err error) {
 	if data == nil || len(data) < 17 {
-		return nil, fmt.Errorf("not enough data")
-	}
-	if data[1] != "stream_start.v5" {
-		return nil, fmt.Errorf("not stream")
+		return nil, fmt.Errorf("stream start not enough data")
 	}
 	event := StreamEvent{}
 	event.ClientIp = data[0]
@@ -191,29 +188,12 @@ func (krp *KafkaQosStreamParser) parseStreamStartEvent(data []string) (e *Stream
 	// event.TcpConnect, _ = strconv.ParseInt(data[15], 10, 64)
 	// event.RtmpConnect, _ = strconv.ParseInt(data[16], 10, 64)
 
-	if strings.Contains(event.Device, "-") {
-		event.OS = "iOS"
-	} else {
-		event.OS = "Android"
-	}
-
-	info, err := ip17mon.Find(event.ClientIp)
-	if err != nil {
-		return nil, fmt.Errorf("invalid ip")
-	}
-	event.Country = info.Country
-	event.City = info.City
-	event.Region = info.Region
-	event.Isp = info.Isp
 	return &event, nil
 }
 
 func (krp *KafkaQosStreamParser) parseStreamEndEvent(data []string) (e *StreamEvent, err error) {
 	if data == nil || len(data) < 43 {
-		return nil, fmt.Errorf("not enough data")
-	}
-	if data[1] != "stream_end.v5" {
-		return nil, fmt.Errorf("not stream")
+		return nil, fmt.Errorf("stream end not enough data")
 	}
 	event := StreamEvent{}
 	event.ClientIp = data[0]
@@ -250,30 +230,14 @@ func (krp *KafkaQosStreamParser) parseStreamEndEvent(data []string) (e *StreamEv
 	event.ErrorCode, _ = strconv.ParseInt(data[41], 10, 64)
 	event.ErrorOscode, _ = strconv.ParseInt(data[42], 10, 64)
 
-	if strings.Contains(event.Device, "-") {
-		event.OS = "iOS"
-	} else {
-		event.OS = "Android"
-	}
-
-	info, err := ip17mon.Find(event.ClientIp)
-	if err != nil {
-		return nil, fmt.Errorf("invalid ip")
-	}
-	event.Country = info.Country
-	event.City = info.City
-	event.Region = info.Region
-	event.Isp = info.Isp
 	return &event, nil
 }
 
 func (krp *KafkaQosStreamParser) parseStreamEvent(data []string) (e *StreamEvent, err error) {
 	if data == nil || len(data) < 23 {
-		return nil, fmt.Errorf("not enough data")
+		return nil, fmt.Errorf("stream not enough data")
 	}
-	if data[1] != "stream.v5" {
-		return nil, fmt.Errorf("not stream")
-	}
+
 	event := StreamEvent{}
 	event.ClientIp = data[0]
 	event.Data = data
@@ -299,20 +263,6 @@ func (krp *KafkaQosStreamParser) parseStreamEvent(data []string) (e *StreamEvent
 	event.VideoBitrate, _ = strconv.ParseInt(data[21], 10, 64)
 	event.VideoFilterTime, _ = strconv.ParseInt(data[22], 10, 64)
 
-	if strings.Contains(event.Device, "-") {
-		event.OS = "iOS"
-	} else {
-		event.OS = "Android"
-	}
-
-	info, err := ip17mon.Find(event.ClientIp)
-	if err != nil {
-		return nil, fmt.Errorf("invalid ip")
-	}
-	event.Country = info.Country
-	event.City = info.City
-	event.Region = info.Region
-	event.Isp = info.Isp
 	return &event, nil
 }
 
@@ -421,6 +371,26 @@ func streamEndEventToSenderData(e *StreamEvent) models.Data {
 	return d
 }
 
+type sEventConvert func(e *StreamEvent) models.Data
+
+func (event *StreamEvent) appendIpInfo(){
+	info, err := ip17mon.Find(event.ClientIp)
+	if err != nil {
+		log.Println("invalid ip", event.ClientIp)
+		return
+	}
+	event.Country = info.Country
+	event.City = info.City
+	event.Region = info.Region
+	event.Isp = info.Isp
+
+	if strings.Contains(event.Device, "-") {
+		event.OS = "iOS"
+	} else {
+		event.OS = "Android"
+	}
+}
+
 func (krp *KafkaQosStreamParser) Parse(lines []string) ([]models.Data, error) {
 	datas := []models.Data{}
 	for _, line := range lines {
@@ -428,39 +398,40 @@ func (krp *KafkaQosStreamParser) Parse(lines []string) ([]models.Data, error) {
 		if msg == nil || err != nil {
 			continue
 		}
-		if msg.Topic == "qos_raw_stream_v5" {
+		if msg.Topic == "qos_raw_stream_v5" || msg.Topic == "qos_raw_misc_v5"{
 			data := strings.Split(msg.Body, "\t")
 			if len(data) < 5 {
 				continue
 			}
 			var e *StreamEvent
 			var err error
+			var converter sEventConvert
 			var dt models.Data
-			if data[1] == "stream.v5" {
+			tag := data[1]
+			if tag == "stream.v5" {
 				e, err = krp.parseStreamEvent(data)
 				if err != nil || e == nil {
 					continue
 				}
-				e.TimeStamp = msg.Timestamp
-				dt = streamEventToSenderData(e)
-			} else if data[1] == "stream_start.v5" {
+				converter =  streamEventToSenderData
+			} else if tag == "stream_start.v5" {
 				e, err = krp.parseStreamStartEvent(data)
 				if err != nil || e == nil {
 					continue
 				}
-				e.TimeStamp = msg.Timestamp
-				dt = streamStartEventToSenderData(e)
-			} else if data[1] == "stream_end.v5" {
+				converter = streamStartEventToSenderData
+			} else if tag == "stream_end.v5" {
 				e, err = krp.parseStreamEndEvent(data)
 				if err != nil || e == nil {
 					continue
 				}
-				e.TimeStamp = msg.Timestamp
-				dt = streamEndEventToSenderData(e)
+				converter = streamEndEventToSenderData
 			} else {
 				continue
 			}
-
+			e.TimeStamp = msg.Timestamp
+			e.appendIpInfo()
+			dt = converter(e)
 			if _, ok := krp.domains[e.Domain]; ok {
 				datas = append(datas, dt)
 			} else if domainIsIp(e.Domain){
