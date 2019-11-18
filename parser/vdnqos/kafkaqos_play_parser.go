@@ -110,11 +110,9 @@ type PlayEvent struct {
 //222.188.168.212	play.v5	1504250399319	1503281015004993	1.1.0.32	rtmp	pull.lespark.cn	live/57762d4b245bfa685f92af03	-	61.160.199.165	1504250339036	1504250399319	0	14.35	0	47.00	0	13.34	37.22	3342	3968	97199	351830
 func ParsePlayEventData(data []string) (e *PlayEvent, err error) {
 	if data == nil || len(data) < 23 {
-		return nil, fmt.Errorf("not enough data")
+		return nil, fmt.Errorf("play event's data not enogh")
 	}
-	if data[1] != "play.v5" {
-		return nil, fmt.Errorf("not stream")
-	}
+
 	event := PlayEvent{}
 	event.ClientIp = data[0]
 	event.Data = data
@@ -152,11 +150,9 @@ func ParsePlayEventData(data []string) (e *PlayEvent, err error) {
 //112.96.173.42	play_start.v5	1504250339646	1501257229489135	1.5.1	http	114.55.127.136	/g15695073s0t1504250339644u5953981i17.flv	-	114.55.127.136	3615	3698	1002	ffmpeg	ffmpeg	0	0
 func ParsePlayStartEventData(data []string) (e *PlayEvent, err error) {
 	if data == nil || len(data) < 16 {
-		return nil, fmt.Errorf("not enough data")
+		return nil, fmt.Errorf("play start not enough data")
 	}
-	if data[1] != "play_start.v5" {
-		return nil, fmt.Errorf("not stream")
-	}
+
 	event := PlayEvent{}
 	event.ClientIp = data[0]
 	event.Data = data
@@ -191,11 +187,9 @@ func ParsePlayStartEventData(data []string) (e *PlayEvent, err error) {
 //171.41.69.17	play_end.v5	1504250401045	1503145461301629	1.5.1	http	flv.live-baidu.rela.me	/live/101059696.flv	-	flv.live-baidu.rela.me	1504250386897	1504250401045	0	0 1559514	0	2999	vivo_X9	Android	6.0.1	com.thel	4.0.2	0.378	0.178	0.630	0.052	ffmpeg-3.2	-	WIFI	192.168.1.103	8.8.8.8	-	-	0	0	0	0	0	-  -  -
 func ParsePlayEndEventData(data []string) (e *PlayEvent, err error) {
 	if data == nil || len(data) < 37 {
-		return nil, fmt.Errorf("not enough data")
+		return nil, fmt.Errorf("play end not enough data")
 	}
-	if data[1] != "play_end.v5" {
-		return nil, fmt.Errorf("not stream")
-	}
+
 	event := PlayEvent{}
 	event.ClientIp = data[0]
 	event.Data = data
@@ -246,11 +240,9 @@ func ParsePlayEndEventData(data []string) (e *PlayEvent, err error) {
 
 func ParsePlayStartOperationEventData(data []string) (e *PlayEvent, err error) {
 	if data == nil || len(data) < 15 {
-		return nil, fmt.Errorf("not enough data")
+		return nil, fmt.Errorf("play start op not enough data")
 	}
-	if data[1] != "play_start_op.v5" {
-		return nil, fmt.Errorf("not stream")
-	}
+
 	event := PlayEvent{}
 	event.ClientIp = data[0]
 	event.Data = data
@@ -272,11 +264,9 @@ func ParsePlayStartOperationEventData(data []string) (e *PlayEvent, err error) {
 
 func ParsePlayEndOperationEventData(data []string) (e *PlayEvent, err error) {
 	if data == nil || len(data) < 27 {
-		return nil, fmt.Errorf("not enough data")
+		return nil, fmt.Errorf("play end op not enough data")
 	}
-	if data[1] != "play_end_op.v5" {
-		return nil, fmt.Errorf("not stream")
-	}
+
 	event := PlayEvent{}
 	event.ClientIp = data[0]
 	event.Data = data
@@ -539,25 +529,26 @@ func (krp *KafkaQosPlayParser) Parse(lines []string) ([]models.Data, error) {
 			var e *PlayEvent
 			var err error
 			var converter eventConvert
-			if data[1] == "play.v5" {
+			tag := data[1]
+			if tag == "play.v5" {
 				e, err = krp.parsePlayEvent(data)
 				if err != nil || e == nil {
 					continue
 				}
 				converter =  playEventToSenderData
-			} else if data[1] == "play_start.v5" {
+			} else if tag == "play_start.v5" {
 				e, err = krp.parsePlayStartEvent(data)
 				if err != nil || e == nil {
 					continue
 				}
 				converter = playStartEventToSenderData
-			} else if data[1] == "play_end.v5" {
+			} else if tag == "play_end.v5" {
 				e, err = krp.parsePlayEndEvent(data)
 				if err != nil || e == nil {
 					continue
 				}
 				converter =  playEndEventToSenderData
-			} else if data[1] == "play_start_op.v5" {
+			} else if tag == "play_start_op.v5" {
 				e, err = krp.parsePlayStartOperationEvent(data)
 				if err != nil || e == nil {
 					continue
@@ -570,6 +561,7 @@ func (krp *KafkaQosPlayParser) Parse(lines []string) ([]models.Data, error) {
 				}
 				converter = playEndOperationToSenderData
 			} else {
+				log.Println("tag is wrong", tag)
 				continue
 			}
 			e.appendIpInfo()
